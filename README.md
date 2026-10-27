@@ -9,7 +9,8 @@ It never sends commands or requests to the game server.
 - Guild roster with role, online state, guild XP, and weekly XP when supplied by the game
 - Member activity, strongest captured skill, profile freshness, and current trial choices
 - Average, minimum, and maximum level for every captured skill
-- Names of the members at each minimum and maximum, available as row tooltips
+- Visible highest-level member names and counts above levels 100, 125, and 150
+- Current-week warnings when a member above level 125 did not join that skill's trial
 - Explicit profile coverage so partial averages cannot be mistaken for full-guild results
 - Missing-profile checklist
 - Locally cached member profiles and capture age
@@ -34,6 +35,8 @@ It never sends commands or requests to the game server.
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
+The monitor header displays its running version. The release with the visible **Auras** tab and expanded skill rows is `v0.4.0`.
+
 ## Collecting member skill data
 
 The game sends the guild roster automatically, but it does not include every member's full skill list in that roster. Full skills arrive when the game displays a profile.
@@ -47,7 +50,9 @@ This is intentionally manual. Automatically requesting every profile would send 
 
 ## Reading the dashboard
 
-The skill table uses a simple arithmetic mean of the captured members' displayed levels. `Min` and `Max` are the lowest and highest displayed level for that skill. Hover over a skill row to see which members currently hold those values.
+The skill table uses a simple arithmetic mean of the captured members' displayed levels. `Min` and `Max` are the lowest and highest displayed level for that skill. The max-level member names are shown directly, and the threshold columns count levels strictly greater than 100, 125, and 150. Hover over a count to see its members and levels.
+
+For a skill offered in the current weekly trials, `>125 not in trial` lists captured members above level 125 who chose another skilling trial or no skilling trial. This is deliberately separate from the general participation warning, which only lists members who joined neither a skilling nor a combat trial.
 
 `Coverage` is the number of current roster members with a cached profile divided by the roster size. Statistics with less than 100% coverage are valid only for the captured subset.
 
@@ -58,7 +63,7 @@ Select **Snapshot** to save the current aggregate locally. The `Change` column c
 The **Trials** tab reads the current weekly trial set and the signup information already sent to the game. It shows:
 
 - How many members signed up for skilling and combat trials
-- Which members have not signed up for each category
+- Which members signed up for neither skilling nor combat; category-specific absence is not treated as a general participation warning
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial

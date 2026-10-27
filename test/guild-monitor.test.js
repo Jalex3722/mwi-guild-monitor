@@ -60,6 +60,7 @@ test("calculates average, minimum, maximum, and coverage", () => {
     assert.equal(cooking.maxLevel, 80);
     assert.deepEqual(cooking.minMembers, ["Babbage"]);
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
+    assert.equal(cooking.thresholdCounts[100].count, 0);
 });
 
 test("normalizes a profile response", () => {
@@ -131,7 +132,44 @@ test("tracks current guild-trial signups and signup levels", () => {
     assert.equal(analysis.combatSignedCount, 1);
     assert.equal(analysis.skilling[0].averageLevel, 60);
     assert.equal(analysis.combat[0].roles["/combat_roles/tank"], 1);
-    assert.equal(analysis.unsignedSkilling[0].name, "Curie");
+    assert.equal(analysis.anyTrialSignedCount, 2);
+    assert.equal(analysis.unsignedTrials.length, 1);
+    assert.equal(analysis.unsignedTrials[0].name, "Curie");
+});
+
+test("tracks high-level members missing a specific skilling trial", () => {
+    const highLevelRoster = [
+        { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook", signedUpCombatTrialHrid: "badger" },
+        { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "mine", signedUpCombatTrialHrid: "" },
+        { id: "3", name: "Curie", role: "member", signedUpSkillingTrialHrid: "", signedUpCombatTrialHrid: "badger" },
+        { id: "4", name: "Noether", role: "member", signedUpSkillingTrialHrid: "", signedUpCombatTrialHrid: "" },
+    ];
+    const highLevelProfiles = {
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 151 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 140 }] },
+        3: { id: "3", name: "Curie", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 130 }] },
+        4: { id: "4", name: "Noether", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 125 }] },
+    };
+    const aggregate = Core.aggregateGuild(highLevelRoster, highLevelProfiles);
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook"], combatHrids: ["badger"] },
+        trialDetails: {
+            cook: { skillHrid: "/skills/cooking" },
+            badger: { kind: "combat", name: "Badger" },
+        },
+    });
+    const cooking = aggregate.skills.find((skill) => skill.skillHrid === "/skills/cooking");
+    const cookingGap = analysis.highLevelSkillGaps.find((gap) => gap.skillHrid === "/skills/cooking");
+
+    assert.equal(cooking.thresholdCounts[100].count, 4);
+    assert.equal(cooking.thresholdCounts[125].count, 3);
+    assert.equal(cooking.thresholdCounts[150].count, 1);
+    assert.deepEqual(cooking.maxMembers, ["Ada"]);
+    assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
+    assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
+    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Curie"), false);
+    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), true);
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
