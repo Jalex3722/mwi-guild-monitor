@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.6.0
+// @version      0.7.0
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -673,8 +673,20 @@
 
         const skilling = skillingHrids.map((hrid) => makeTrial(hrid, "skilling"));
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
-        const recommendations = buildSkillingRecommendations(currentMembers, skilling);
+        const recommendations = buildSkillingRecommendations(currentMembers, skilling, aggregate.skills);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
+        const optimalDistribution = skilling.map((trial) => {
+            const assignments = recommendations.filter((entry) => entry.recommendedTrialHrid === trial.trialHrid)
+                .sort((left, right) => left.memberName.localeCompare(right.memberName));
+            return {
+                trialHrid: trial.trialHrid,
+                trialName: trial.name,
+                assignments,
+                aligned: assignments.filter((entry) => entry.currentTrialHrid === trial.trialHrid),
+                signedElsewhere: assignments.filter((entry) => entry.currentTrialHrid && entry.currentTrialHrid !== trial.trialHrid),
+                unsigned: assignments.filter((entry) => !entry.currentTrialHrid),
+            };
+        });
         const highLevelSkillGaps = skilling.map((trial) => ({
             trialHrid: trial.trialHrid,
             trialName: trial.name,
@@ -715,6 +727,7 @@
             combat,
             recommendations,
             medianSuggestions,
+            optimalDistribution,
             highLevelSkillGaps,
             auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
@@ -724,42 +737,46 @@
         };
     }
 
-    function buildSkillingRecommendations(members, trials) {
+    function buildSkillingRecommendations(members, trials, aggregateSkills = []) {
         if (!trials.length) return [];
+        const medianBySkill = new Map(aggregateSkills.map((skill) => [skill.skillHrid, skill.median]));
         const candidates = members
-            .filter((member) => member.currentSkillingTrialHrid || !member.currentCombatTrialHrid)
             .map((member) => {
                 const options = trials
                     .map((trial) => ({
                         trial,
                         level: getProfileSkillLevel(member, trial.skillHrid),
+                        guildMedian: medianBySkill.get(trial.skillHrid),
                     }))
                     .filter((option) => Number.isFinite(option.level) && (trialAllowsLevel(option.trial, option.level)));
-                options.sort((left, right) => right.level - left.level || left.trial.name.localeCompare(right.trial.name));
-                return { member, options, specialization: options.length > 1 ? options[0].level - options[1].level : options.length ? options[0].level : -1 };
+                options.forEach((option) => {
+                    option.medianDifference = Number.isFinite(option.guildMedian) ? option.level - option.guildMedian : option.level;
+                });
+                options.sort((left, right) => right.medianDifference - left.medianDifference || right.level - left.level || left.trial.name.localeCompare(right.trial.name));
+                return { member, options, specialization: options.length > 1 ? options[0].medianDifference - options[1].medianDifference : options.length ? options[0].medianDifference : -1 };
             })
             .filter((candidate) => candidate.options.length)
             .sort((left, right) => right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
 
+        const minPerTrial = Math.floor(candidates.length / trials.length);
         const maxPerTrial = Math.ceil(candidates.length / trials.length);
         const recommendedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, 0]));
-        const actualCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, trial.signupCount]));
         const assignments = [];
 
         candidates.forEach((candidate) => {
-            const option = candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < maxPerTrial) || candidate.options[0];
+            const option = candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < minPerTrial) ||
+                candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < maxPerTrial) ||
+                candidate.options[0];
             recommendedCounts[option.trial.trialHrid] += 1;
             const currentHrid = candidate.member.currentSkillingTrialHrid;
             const currentTrial = trials.find((trial) => trial.trialHrid === currentHrid) || null;
             const currentLevel = currentTrial ? getProfileSkillLevel(candidate.member, currentTrial.skillHrid) : null;
             const isAligned = currentHrid === option.trial.trialHrid;
-            let reason = "Highest-level fit in the balanced allocation";
+            let reason = "Strongest median-relative fit in the balanced allocation";
             if (!currentHrid) {
-                reason = "Not signed up; best fit from captured levels";
-            } else if (!isAligned && Number.isFinite(currentLevel) && option.level > currentLevel) {
-                reason = `${option.level - currentLevel} levels stronger than the current signup`;
+                reason = "Not signed up; best balanced fit from captured levels";
             } else if (!isAligned) {
-                reason = `Balances current rosters (${actualCounts[currentHrid] || 0} vs ${actualCounts[option.trial.trialHrid] || 0})`;
+                reason = `Signed for ${currentTrial ? currentTrial.name : "another trial"}; optimal distribution places them in ${option.trial.name}`;
             }
 
             assignments.push({
@@ -771,6 +788,8 @@
                 recommendedTrialHrid: option.trial.trialHrid,
                 recommendedTrialName: option.trial.name,
                 recommendedLevel: option.level,
+                recommendedGuildMedian: option.guildMedian,
+                medianDifference: option.medianDifference,
                 isAligned,
                 reason,
             });
@@ -932,7 +951,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.6.0";
+    const SCRIPT_VERSION = "0.7.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1335,6 +1354,7 @@ function startGuildMonitor(Core) {
             .mwigm-skill-stat .mwigm-subtext { overflow-wrap: anywhere; }
             .mwigm-skill-row:hover { background: #17243a; }
             .mwigm-skill-name, .mwigm-member-name { color: #f6f8fc; font-weight: 600; }
+            .mwigm-member-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; white-space: normal; }
             .mwigm-subtext { color: #92a2b9; font-size: 11px; }
             .mwigm-up { color: #68d5a9; }
             .mwigm-muted { color: #93a2b7; }
@@ -1604,6 +1624,7 @@ function startGuildMonitor(Core) {
     function renderMembers(aggregate) {
         const tracking = currentMemberTracking(aggregate);
         const trackingById = new Map(tracking.map((entry) => [String(entry.memberId), entry]));
+        const medianSuggestionById = new Map(currentTrialAnalysis(aggregate).medianSuggestions.map((entry) => [String(entry.memberId), entry]));
         let members = aggregate.members.filter((member) => member.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
         members = sortMembers(members, trackingById);
         const offlineCount = tracking.filter((entry) => entry.offlineThreeDays).length;
@@ -1621,6 +1642,7 @@ function startGuildMonitor(Core) {
         const rows = members.map((member) => {
             const profile = member.profile;
             const memberTracking = trackingById.get(String(member.id));
+            const trialSuggestion = medianSuggestionById.get(String(member.id));
             const total = profile ? profile.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID) : null;
             const strongest = Core.strongestSkill(member, state.skillDetails);
             const auraHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
@@ -1637,9 +1659,12 @@ function startGuildMonitor(Core) {
             const previousWeekStatus = memberTracking ? memberTracking.previousWeekStatus : "unknown";
             const previousWeekLabel = previousWeekStatus === "missed" ? "Missed" : previousWeekStatus === "participated" ? "Joined" : "Unknown";
             const previousWeekClass = previousWeekStatus === "missed" ? "mwigm-chip-alert" : previousWeekStatus === "participated" ? "mwigm-chip-good" : "";
+            const trialChoices = trialSuggestion
+                ? `${renderMemberTrialChoice(trialSuggestion.first, "1st", "mwigm-chip-good")}${trialSuggestion.second ? renderMemberTrialChoice(trialSuggestion.second, "2nd", "") : ""}`
+                : "";
             return `
                 <tr>
-                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${memberTracking && memberTracking.offlineThreeDays ? ` <span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}<br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
+                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
@@ -1650,6 +1675,12 @@ function startGuildMonitor(Core) {
             `;
         }).join("");
         return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th><th>Profile</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    function renderMemberTrialChoice(choice, rank, className) {
+        const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
+        const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}`;
+        return `<span class="mwigm-chip ${className}" title="${escapeHtml(title)}">${rank} ${escapeHtml(choice.trialName)}</span>`;
     }
 
     function renderTrials(aggregate) {
@@ -1691,31 +1722,38 @@ function startGuildMonitor(Core) {
                 return rightGap - leftGap || left.memberName.localeCompare(right.memberName);
             });
         }
-        const recommendationRows = recommendations.map((entry) => `
-            <tr>
-                <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
-                <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? ` <span class="mwigm-subtext">Lv ${entry.currentLevel}</span>` : ""}</td>
-                <td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel}</span></td>
-                <td><span class="mwigm-chip ${entry.isAligned ? "mwigm-chip-good" : "mwigm-chip-warn"}">${entry.isAligned ? "Aligned" : "Review"}</span></td>
-            </tr>
-        `).join("");
-        const medianRows = analysis.medianSuggestions.filter((entry) =>
-            entry.memberName.toLocaleLowerCase().includes(query) ||
-            entry.first.trialName.toLocaleLowerCase().includes(query) ||
-            (entry.second && entry.second.trialName.toLocaleLowerCase().includes(query)),
-        ).map((entry) => {
-            const currentName = entry.currentTrialHrid ? Core.getTrialName(entry.currentTrialHrid, state.guildTrialDetails, state.skillDetails) : "Not signed up";
-            const status = entry.currentTrialHrid === entry.first.trialHrid ? "First choice" : entry.second && entry.currentTrialHrid === entry.second.trialHrid ? "Second choice" : entry.currentTrialHrid ? "Other choice" : "Unsigned";
-            const statusClass = status === "First choice" || status === "Second choice" ? "mwigm-chip-good" : "mwigm-chip-warn";
+        const recommendationRows = recommendations.map((entry) => {
+            const status = entry.isAligned ? "Aligned" : entry.currentTrialHrid ? "Different signup" : "Not signed";
+            const statusClass = entry.isAligned ? "mwigm-chip-good" : entry.currentTrialHrid ? "mwigm-chip-alert" : "mwigm-chip-warn";
             return `
                 <tr>
-                    <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">Current: ${escapeHtml(currentName)}</span></td>
-                    <td>${renderMedianChoice(entry.first)}</td>
-                    <td>${entry.second ? renderMedianChoice(entry.second) : "--"}</td>
+                    <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
+                    <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? ` <span class="mwigm-subtext">Lv ${entry.currentLevel}</span>` : ""}</td>
+                    <td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel} · ${formatSignedDifference(entry.medianDifference)} vs median</span></td>
                     <td><span class="mwigm-chip ${statusClass}">${status}</span></td>
                 </tr>
             `;
         }).join("");
+        const distributionRows = analysis.optimalDistribution.filter((trial) =>
+            trial.trialName.toLocaleLowerCase().includes(query) || trial.assignments.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)),
+        ).map((trial) => {
+            const members = trial.assignments.map((entry) => `${entry.memberName} (Lv ${entry.recommendedLevel})`).join(", ") || "No eligible members";
+            const signedElsewhere = trial.signedElsewhere.map((entry) => `${entry.memberName} (${entry.currentTrialName})`).join(", ") || "--";
+            const unsigned = trial.unsigned.map((entry) => entry.memberName).join(", ") || "--";
+            return `
+                <tr>
+                    <td><span class="mwigm-trial-name">${escapeHtml(trial.trialName)}</span></td>
+                    <td>${trial.assignments.length}</td>
+                    <td title="${escapeHtml(members)}">${escapeHtml(members)}</td>
+                    <td class="${trial.signedElsewhere.length ? "mwigm-aura-duplicate" : "mwigm-muted"}">${escapeHtml(signedElsewhere)}</td>
+                    <td class="${trial.unsigned.length ? "mwigm-missing" : "mwigm-muted"}">${escapeHtml(unsigned)}</td>
+                </tr>
+            `;
+        }).join("");
+        const mismatches = analysis.recommendations.filter((entry) => entry.currentTrialHrid && !entry.isAligned);
+        const mismatchNotice = mismatches.length
+            ? `<div class="mwigm-notice"><strong>Signed for a different trial than the optimal distribution:</strong> ${escapeHtml(mismatches.map((entry) => `${entry.memberName} (${entry.currentTrialName} → ${entry.recommendedTrialName})`).join(", "))}</div>`
+            : "";
 
         return `
             ${overview}
@@ -1725,18 +1763,13 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
-            <div class="mwigm-section-title">Median-fit choices <span>First and second skill relative to the captured guild median</span></div>
-            <div class="mwigm-notice">Choices rank each member by level minus the guild median for this week's eligible trial skills. Positive values indicate a level above the captured guild median; roster balance and availability are not included.</div>
-            <table class="mwigm-table"><thead><tr><th style="width:28%">Member</th><th>First choice</th><th>Second choice</th><th>Current fit</th></tr></thead><tbody>${medianRows}</tbody></table>
-            <div class="mwigm-section-title">Skilling allocation suggestions <span>Current skilling rosters and members with no trial signup</span></div>
-            <div class="mwigm-notice">Suggestions divide captured, eligible members across this week's skilling trials, prioritizing each member's strongest relevant skill. They are planning hints, not predictions; stale profiles, equipment, buffs, and availability are not modeled.</div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Suggested</th><th>Status</th></tr></thead><tbody>${recommendationRows}</tbody></table>
+            <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
+            <div class="mwigm-notice">The target distribution balances captured, eligible members across this week's skilling trials, then favors the skill where each member is strongest relative to the guild median. Stale profiles, equipment, buffs, and availability are not modeled.</div>
+            ${mismatchNotice}
+            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:18%">Trial</th><th>Target</th><th style="width:34%">Optimal members</th><th>Signed elsewhere</th><th>Not signed</th></tr></thead><tbody>${distributionRows}</tbody></table>
+            <div class="mwigm-section-title">Member assignments <span>Current signup compared with the optimal distribution</span></div>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Optimal</th><th>Status</th></tr></thead><tbody>${recommendationRows}</tbody></table>
         `;
-    }
-
-    function renderMedianChoice(choice) {
-        const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
-        return `${escapeHtml(choice.trialName)} <span class="mwigm-subtext">Lv ${formatCompactDecimal(choice.level)} · ${difference} vs median ${formatCompactDecimal(choice.guildMedian)}</span>`;
     }
 
     function renderTrialRow(trial, isCombat) {
@@ -2069,6 +2102,12 @@ function startGuildMonitor(Core) {
         const number = Number(value);
         if (!Number.isFinite(number)) return "--";
         return Number.isInteger(number) ? String(number) : number.toFixed(1);
+    }
+
+    function formatSignedDifference(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "--";
+        return `${number >= 0 ? "+" : ""}${formatCompactDecimal(number)}`;
     }
 
     function formatDelta(value) {

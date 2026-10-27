@@ -169,16 +169,16 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
     assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
-    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Curie"), false);
+    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Curie"), true);
     assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), true);
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
     const recommendationRoster = [
-        { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "/guild_skilling/cooking" },
-        { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "/guild_skilling/cooking" },
-        { id: "3", name: "Curie", role: "member", signedUpSkillingTrialHrid: "/guild_skilling/mining" },
-        { id: "4", name: "Noether", role: "member", signedUpSkillingTrialHrid: "" },
+        { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "cook" },
+        { id: "3", name: "Curie", role: "member", signedUpSkillingTrialHrid: "mine" },
+        { id: "4", name: "Noether", role: "member", signedUpSkillingTrialHrid: "", signedUpCombatTrialHrid: "badger" },
     ];
     const recommendationProfiles = {
         1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 100 }, { skillHrid: "/skills/mining", level: 70 }] },
@@ -198,11 +198,17 @@ test("balances skilling recommendations while respecting minimum levels", () => 
     });
     const babbage = analysis.recommendations.find((entry) => entry.memberName === "Babbage");
     const noether = analysis.recommendations.find((entry) => entry.memberName === "Noether");
+    const cookingDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "cook");
+    const miningDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "mine");
 
     assert.equal(babbage.recommendedTrialHrid, "mine");
     assert.equal(babbage.isAligned, false);
     assert.equal(noether.recommendedTrialHrid, "cook");
     assert.equal(noether.currentTrialName, "Not signed up");
+    assert.deepEqual(cookingDistribution.assignments.map((entry) => entry.memberName), ["Ada", "Noether"]);
+    assert.deepEqual(miningDistribution.assignments.map((entry) => entry.memberName), ["Babbage", "Curie"]);
+    assert.deepEqual(miningDistribution.signedElsewhere.map((entry) => entry.memberName), ["Babbage"]);
+    assert.deepEqual(cookingDistribution.unsigned.map((entry) => entry.memberName), ["Noether"]);
 });
 
 test("tracks exact-one aura coverage for each combat trial", () => {

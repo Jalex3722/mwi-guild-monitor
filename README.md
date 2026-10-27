@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The release with market-priced shrine planning and median trial choices is `v0.6.0`.
+The monitor header displays its running version. The release with member-level first/second trial choices and optimal skilling distribution is `v0.7.0`.
 
 ## Collecting member skill data
 
@@ -62,7 +62,7 @@ For a skill offered in the current weekly trials, `>125 not in trial` lists capt
 
 Select **Snapshot** to save the current aggregate locally. The `Change` column compares the current average with the latest saved snapshot. Because profiles are captured at different times, treat snapshots as operational estimates rather than synchronized leaderboard records.
 
-The **Members** tab flags a player after a known offline duration reaches 72 hours. A hidden online status or unavailable timestamp is shown separately and is never treated as a 3-day absence.
+The **Members** tab places each captured member's first and second median-fit trial choices beside their name. It also flags a player after a known offline duration reaches 72 hours. A hidden online status or unavailable timestamp is shown separately and is never treated as a 3-day absence.
 
 ## Guild trials
 
@@ -73,11 +73,11 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial
-- Suggested skilling allocations for members with captured profiles
+- An optimal target distribution for every skilling trial, including members currently signed elsewhere or not signed up
 
-The skilling recommendation is deliberately simple and visible. It filters out trials whose minimum level the member does not meet, prioritizes the member's strongest relevant skill, and caps each suggested roster near an even share of the covered members. Specialized members are assigned first. A suggestion marked **Review** means the balanced allocation differs from the member's current signup; it does not mean the current choice is necessarily wrong.
+The optimal skilling distribution is deliberately simple and visible. It filters out trials whose minimum level the member does not meet, ranks options by the member's level relative to the captured guild median, and caps each target roster near an even share of covered members. Specialized members are assigned first. **Different signup** means the member's current skilling trial differs from that balanced target; it does not mean the current choice is necessarily wrong.
 
-The separate **Median-fit choices** table ranks each eligible weekly skill by `member level - captured guild median`. It shows the first and second choice for every member with a captured profile. This highlights where a member is strongest relative to the guild, but does not model attendance, equipment, consumables, or roster quotas.
+The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
