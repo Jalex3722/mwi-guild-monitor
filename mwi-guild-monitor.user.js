@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.8.1
+// @version      0.8.2
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -858,6 +858,7 @@
             const currentTrial = trials.find((trial) => trial.trialHrid === currentHrid) || null;
             const currentLevel = currentTrial ? getProfileSkillLevel(candidate.member, currentTrial.skillHrid) : null;
             const isAligned = currentHrid === option.trial.trialHrid;
+            const signupStatus = isAligned ? "aligned" : currentHrid ? "different" : candidate.member.currentCombatTrialHrid ? "combatOnly" : "unsigned";
             let reason = bestPlan ? "Globally optimized balanced assignment" : "Eligibility-constrained fallback";
             if (!currentHrid) {
                 reason = "Not signed up for a skilling trial";
@@ -877,6 +878,7 @@
                 recommendedGuildMedian: option.guildMedian,
                 medianDifference: option.medianDifference,
                 isAligned,
+                signupStatus,
                 reason,
             };
         });
@@ -1110,7 +1112,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.8.1";
+    const SCRIPT_VERSION = "0.8.2";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1583,6 +1585,11 @@ function startGuildMonitor(Core) {
             .mwigm-aura-duplicate { color: #ef8f82; }
             .mwigm-economy-table { min-width: 800px; }
             .mwigm-trial-plan-table { min-width: 980px; }
+            .mwigm-target-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 12px; color: #b9c8da; font-size: 11px; }
+            .mwigm-target-member { font-weight: 650; }
+            .mwigm-target-aligned { color: #77d2b2; }
+            .mwigm-target-different { color: #efbd70; }
+            .mwigm-target-unsigned { color: #f19a91; }
             .mwigm-shrine-table { min-width: 860px; }
             .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
             .mwigm-shrine-group > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
@@ -1946,11 +1953,12 @@ function startGuildMonitor(Core) {
             });
         }
         const recommendationRows = recommendations.map((entry) => {
-            const status = entry.isAligned ? "Aligned" : entry.currentTrialHrid ? "Different signup" : "Not signed";
-            const statusClass = entry.isAligned ? "mwigm-chip-good" : entry.currentTrialHrid ? "mwigm-chip-alert" : "mwigm-chip-warn";
+            const status = entry.signupStatus === "aligned" ? "Aligned" : entry.signupStatus === "different" ? "Different skilling" : entry.signupStatus === "combatOnly" ? "Combat only" : "No signup";
+            const statusClass = entry.signupStatus === "aligned" ? "mwigm-chip-good" : entry.signupStatus === "unsigned" ? "mwigm-chip-alert" : "mwigm-chip-warn";
+            const nameClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-different";
             return `
                 <tr>
-                    <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
+                    <td><span class="mwigm-target-member ${nameClass}">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
                     <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? ` <span class="mwigm-subtext">Lv ${entry.currentLevel}</span>` : ""}</td>
                     <td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel} · ${formatSignedDifference(entry.medianDifference)} vs median</span></td>
                     <td><span class="mwigm-chip ${statusClass}">${status}</span></td>
@@ -1963,7 +1971,11 @@ function startGuildMonitor(Core) {
             trial.actualSignups.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)),
         ).map((trial) => {
             const actualNames = trial.actualSignups.map((entry) => entry.memberName).join(", ") || "No signups";
-            const targetNames = trial.assignments.map((entry) => `${entry.memberName} (Lv ${entry.recommendedLevel})`).join(", ") || "No eligible members";
+            const targetNames = trial.assignments.map((entry) => {
+                const statusClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-different";
+                const statusTitle = entry.signupStatus === "aligned" ? "Signed for this skilling trial" : entry.signupStatus === "different" ? `Signed for ${entry.currentTrialName}` : entry.signupStatus === "combatOnly" ? "Combat signup only; no skilling signup" : "No skilling or combat signup";
+                return `<span class="mwigm-target-member ${statusClass}" title="${escapeHtml(statusTitle)}">${escapeHtml(entry.memberName)}</span> <span class="mwigm-subtext">(Lv ${entry.recommendedLevel})</span>`;
+            }).join(", ") || "No eligible members";
             const targetIds = new Set(trial.assignments.map((entry) => String(entry.memberId)));
             const incoming = trial.signedElsewhere.length + trial.unsigned.length;
             const outgoing = trial.actualSignups.filter((entry) => !targetIds.has(String(entry.memberId))).length;
@@ -1972,7 +1984,7 @@ function startGuildMonitor(Core) {
                     <td><span class="mwigm-trial-name">${escapeHtml(trial.trialName)}</span></td>
                     <td><strong>${trial.actualSignups.length} signed</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(actualNames)}</span></td>
                     <td>${Number.isFinite(trial.actualAverageLevel) ? trial.actualAverageLevel.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.actualProfileCount}/${trial.actualSignups.length} profiles</span></td>
-                    <td><strong>${trial.assignments.length} targeted</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(targetNames)}</span></td>
+                    <td><strong>${trial.assignments.length} targeted</strong><span class="mwigm-roster-names">${targetNames}</span></td>
                     <td>${Number.isFinite(trial.targetAverageLevel) ? trial.targetAverageLevel.toFixed(1) : "--"}</td>
                     <td class="${incoming || outgoing ? "mwigm-missing" : "mwigm-up"}">${incoming || outgoing ? `${incoming} in · ${outgoing} out` : "Aligned"}</td>
                 </tr>
@@ -1993,6 +2005,7 @@ function startGuildMonitor(Core) {
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
             <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. For feasible even rosters, it maximizes the sum of trial average levels above guild medians. Both averages below use captured profile levels, not signup-time snapshots. Signup slot caps, gear, buffs, and availability are not modeled.</div>
+            <div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-aligned">Green: signed here</span><span class="mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-unsigned">Red: no trial signup</span></div>
             ${analysis.allocationBalanced ? "" : `<div class="mwigm-notice">Even target rosters are infeasible with the known minimum levels. This is a best-fit fallback, not a global optimum.</div>`}
             ${mismatchNotice}
             <table class="mwigm-table mwigm-trial-plan-table"><thead><tr><th style="width:15%">Trial</th><th style="width:25%">Actually signed</th><th>Actual avg</th><th style="width:25%">Optimized target</th><th>Target avg</th><th>Changes</th></tr></thead><tbody>${distributionRows || emptyTableRow(6)}</tbody></table>

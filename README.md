@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.8.1`.
+The monitor header displays its running version. The current release is `v0.8.2`.
 
 ## Collecting member skill data
 
@@ -78,6 +78,8 @@ The **Trials** tab reads the current weekly trial set and the signup information
 The optimizer assigns each captured member with at least one eligible skill to one skilling trial, respects guild minimum levels, and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and finds the assignment maximizing the sum of per-trial averages of `member level - captured guild median`. When every trial has a target roster, subtracting medians is a constant offset, so this also maximizes the sum of raw trial average levels. If minimum levels make balanced rosters infeasible, the script shows a best-fit fallback and labels it as such. **Different signup** means the member's current skilling trial differs from that target; it does not mean their current choice is necessarily wrong.
 
 The Trials tab displays actual signup rosters and signup-time levels when available, then compares actual and optimized rosters using captured profile levels for both averages. Actual averages show how many signed members have captured profiles. Players without captured profiles cannot be optimized; check **Missing profiles** before using the plan for decisions. Signup slot caps, equipment, buffs, and availability are not modeled.
+
+Names in the optimized target roster are green when signed for that skilling trial, yellow when signed for another skilling trial or for combat only, and red when signed for neither trial category. The status column uses the same colors, and each name has a tooltip describing its current signup.
 
 The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 

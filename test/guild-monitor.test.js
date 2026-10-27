@@ -171,6 +171,8 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
     assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Curie"), true);
     assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), true);
+    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Curie").signupStatus, "combatOnly");
+    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Noether").signupStatus, "unsigned");
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
@@ -203,8 +205,11 @@ test("balances skilling recommendations while respecting minimum levels", () => 
 
     assert.equal(babbage.recommendedTrialHrid, "mine");
     assert.equal(babbage.isAligned, false);
+    assert.equal(babbage.signupStatus, "different");
     assert.equal(noether.recommendedTrialHrid, "cook");
     assert.equal(noether.currentTrialName, "Not signed up");
+    assert.equal(noether.signupStatus, "combatOnly");
+    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Ada").signupStatus, "aligned");
     assert.deepEqual(cookingDistribution.assignments.map((entry) => entry.memberName), ["Ada", "Noether"]);
     assert.deepEqual(miningDistribution.assignments.map((entry) => entry.memberName), ["Babbage", "Curie"]);
     assert.deepEqual(miningDistribution.signedElsewhere.map((entry) => entry.memberName), ["Babbage"]);
