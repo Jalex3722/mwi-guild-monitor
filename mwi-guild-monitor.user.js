@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.5.0
-// @description  Read-only guild roster and skill statistics for Milky Way Idle leaders and officers.
+// @version      0.6.0
+// @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
 // @supportURL   https://github.com/Jalex3722/mwi-guild-monitor/issues
@@ -71,6 +71,13 @@
     function getSkillName(hrid, skillDetails = {}) {
         const detail = skillDetails[hrid] || {};
         return detail.name || detail.displayName || prettifyHrid(hrid);
+    }
+
+    function median(values) {
+        const sorted = values.map(Number).filter(Number.isFinite).sort((left, right) => left - right);
+        if (!sorted.length) return null;
+        const middle = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
     }
 
     function normalizeSkills(skills) {
@@ -221,6 +228,7 @@
                     skillHrid,
                     name: getSkillName(skillHrid, skillDetails),
                     average: entries.length ? total / entries.length : 0,
+                    median: median(entries.map((entry) => entry.level)),
                     minLevel,
                     maxLevel,
                     minMembers,
@@ -345,6 +353,214 @@
         });
     }
 
+    function positiveNumber(value) {
+        const number = Number(value);
+        return Number.isFinite(number) && number > 0 ? number : 0;
+    }
+
+    function getItemName(itemHrid, itemDetails = {}) {
+        const detail = asObject(itemDetails)[itemHrid] || {};
+        return detail.name || detail.displayName || prettifyHrid(itemHrid);
+    }
+
+    function getMarketLevelRecord(marketData, itemHrid) {
+        const root = asObject(marketData);
+        const records = asObject((root.marketData || root)[itemHrid]);
+        return records[0] || records["0"] || null;
+    }
+
+    function getMarketItemValue(marketItemValues, itemHrid) {
+        const records = asObject(asObject(marketItemValues)[itemHrid]);
+        return positiveNumber(records[0] ?? records["0"]);
+    }
+
+    function getMarketQuote(itemHrid, marketData = {}, marketItemValues = {}) {
+        const record = getMarketLevelRecord(marketData, itemHrid) || {};
+        const ask = positiveNumber(record.a ?? record.ask);
+        const bid = positiveNumber(record.b ?? record.bid);
+        const fair = positiveNumber(record.p ?? record.averagePrice) || getMarketItemValue(marketItemValues, itemHrid);
+        const unitPrice = ask || fair || bid;
+        return {
+            ask,
+            bid,
+            fair,
+            unitPrice,
+            source: ask ? "ask" : fair ? "fair" : bid ? "bid" : "unavailable",
+        };
+    }
+
+    function getGuildBuffLevel(guildBuffLevels, guildBuffHrid) {
+        const record = asObject(guildBuffLevels)[guildBuffHrid];
+        const value = record && typeof record === "object" ? record.level ?? record.currentLevel : record;
+        const level = Number(value);
+        return Number.isSafeInteger(level) && level > 0 ? level : 0;
+    }
+
+    function extractGuildBuffLevels(payload, existing = {}) {
+        const preferredKeys = ["characterGuildBuffMap", "characterGuildBuffDict", "characterGuildBuffs", "characterGuildBuffLevelMap", "characterGuildBuffLevelDict"];
+        const fallbackKeys = ["guildBuffLevelMap", "guildBuffLevelDict", "guildBuffLevels", "guildBuffMap", "guildBuffDict"];
+        const preferred = [];
+        const fallback = [];
+        const pending = [{ value: payload, depth: 0 }];
+        const visited = new Set();
+        let scanned = 0;
+
+        while (pending.length && scanned < 400) {
+            const { value, depth } = pending.pop();
+            if (!value || typeof value !== "object" || visited.has(value) || depth > 6) continue;
+            visited.add(value);
+            scanned += 1;
+            preferredKeys.forEach((key) => {
+                if (value[key] && typeof value[key] === "object") preferred.push(value[key]);
+            });
+            fallbackKeys.forEach((key) => {
+                if (value[key] && typeof value[key] === "object") fallback.push(value[key]);
+            });
+            Object.values(value).forEach((child) => {
+                if (child && typeof child === "object") pending.push({ value: child, depth: depth + 1 });
+            });
+        }
+
+        return [...fallback, ...preferred].reduce((levels, candidate) => {
+            const entries = Array.isArray(candidate)
+                ? candidate.map((record, index) => [record && (record.guildBuffHrid || record.hrid) || String(index), record])
+                : Object.entries(candidate);
+            entries.forEach(([hrid, record]) => {
+                if (hrid) levels[hrid] = record;
+            });
+            return levels;
+        }, { ...asObject(existing) });
+    }
+
+    function analyzeGuildEconomy({
+        itemDetails = {},
+        guildBuffDetails = {},
+        guildBuffLevels = {},
+        marketData = {},
+        marketItemValues = {},
+    } = {}) {
+        const creditGroups = new Map();
+        const guildTokenRoutes = [];
+        const details = asObject(itemDetails);
+
+        Object.entries(details).forEach(([fallbackHrid, rawDetail]) => {
+            const detail = rawDetail || {};
+            const itemHrid = detail.hrid || detail.itemHrid || fallbackHrid;
+            const conversions = Array.isArray(detail.guildCreditConversions) ? detail.guildCreditConversions : [];
+            conversions.forEach((conversion) => {
+                const creditHrid = conversion && conversion.creditItemHrid;
+                const creditCount = positiveNumber(conversion && conversion.creditCount);
+                if (!creditHrid || !creditCount) return;
+                if (!creditGroups.has(creditHrid)) {
+                    creditGroups.set(creditHrid, {
+                        creditHrid,
+                        creditName: getItemName(creditHrid, details),
+                        options: [],
+                    });
+                }
+
+                if (itemHrid === "/items/guild_token") {
+                    const guildTokenCount = positiveNumber(conversion.guildTokenCount ?? conversion.itemCount);
+                    if (guildTokenCount) guildTokenRoutes.push({ creditHrid, creditCount, guildTokenCount });
+                    return;
+                }
+
+                const itemCount = positiveNumber(conversion.itemCount);
+                if (!itemCount) return;
+                const quote = getMarketQuote(itemHrid, marketData, marketItemValues);
+                creditGroups.get(creditHrid).options.push({
+                    itemHrid,
+                    itemName: getItemName(itemHrid, details),
+                    itemCount,
+                    creditCount,
+                    ...quote,
+                    available: quote.unitPrice > 0,
+                    totalCost: quote.unitPrice > 0 ? quote.unitPrice * itemCount : null,
+                    costPerCredit: quote.unitPrice > 0 ? quote.unitPrice * itemCount / creditCount : null,
+                });
+            });
+        });
+
+        const credits = [...creditGroups.values()].map((group) => {
+            group.options.sort((left, right) => {
+                if (left.available !== right.available) return left.available ? -1 : 1;
+                return (left.costPerCredit ?? Number.POSITIVE_INFINITY) - (right.costPerCredit ?? Number.POSITIVE_INFINITY) || left.itemName.localeCompare(right.itemName);
+            });
+            return { ...group, bestOption: group.options.find((option) => option.available) || null };
+        }).sort((left, right) => left.creditName.localeCompare(right.creditName));
+
+        const creditValues = Object.fromEntries(credits.map((group) => [group.creditHrid, group.bestOption ? group.bestOption.costPerCredit : null]));
+        const valuedTokenRoutes = guildTokenRoutes.map((route) => {
+            const creditValue = creditValues[route.creditHrid];
+            return {
+                ...route,
+                creditName: getItemName(route.creditHrid, details),
+                valuePerGuildToken: Number.isFinite(creditValue) ? creditValue * route.creditCount / route.guildTokenCount : null,
+            };
+        }).sort((left, right) => (right.valuePerGuildToken ?? -1) - (left.valuePerGuildToken ?? -1));
+        const guildTokenValue = valuedTokenRoutes.find((route) => Number.isFinite(route.valuePerGuildToken))?.valuePerGuildToken ?? null;
+
+        const shrines = Object.entries(asObject(guildBuffDetails)).map(([fallbackHrid, rawDetail]) => {
+            const detail = rawDetail || {};
+            const guildBuffHrid = detail.guildBuffHrid || detail.hrid || fallbackHrid;
+            const currentLevel = getGuildBuffLevel(guildBuffLevels, guildBuffHrid);
+            let cumulativeCost = 0;
+            let cumulativeKnown = true;
+            const levels = Object.entries(detail.levelCosts || {})
+                .map(([levelKey, cost]) => ({ level: Number(levelKey), cost }))
+                .filter((entry) => Number.isSafeInteger(entry.level) && entry.level > 0 && entry.cost)
+                .sort((left, right) => left.level - right.level)
+                .map(({ level, cost }) => {
+                    const guildTokenCost = positiveNumber(cost.guildTokenCost);
+                    const creditCosts = (Array.isArray(cost.creditCosts) ? cost.creditCosts : []).map((creditCost) => {
+                        const count = positiveNumber(creditCost && creditCost.count);
+                        const itemHrid = creditCost && creditCost.itemHrid;
+                        const unitCoinCost = itemHrid ? creditValues[itemHrid] : null;
+                        return {
+                            itemHrid,
+                            itemName: getItemName(itemHrid, details),
+                            count,
+                            unitCoinCost,
+                            coinCost: count && Number.isFinite(unitCoinCost) ? count * unitCoinCost : null,
+                        };
+                    }).filter((entry) => entry.count);
+                    const guildTokenCoinCost = guildTokenCost && Number.isFinite(guildTokenValue) ? guildTokenCost * guildTokenValue : guildTokenCost ? null : 0;
+                    const components = [guildTokenCoinCost, ...creditCosts.map((entry) => entry.coinCost)];
+                    const known = components.every(Number.isFinite);
+                    const incrementalCost = known ? components.reduce((sum, value) => sum + value, 0) : null;
+                    if (cumulativeKnown && known) cumulativeCost += incrementalCost;
+                    else cumulativeKnown = false;
+                    return {
+                        level,
+                        guildTokenCost,
+                        guildTokenCoinCost,
+                        creditCosts,
+                        incrementalCost,
+                        cumulativeCost: cumulativeKnown ? cumulativeCost : null,
+                        purchased: level <= currentLevel,
+                    };
+                });
+            return {
+                guildBuffHrid,
+                name: detail.name || detail.displayName || prettifyHrid(guildBuffHrid),
+                isCombat: Boolean(detail.isCombat),
+                currentLevel,
+                levels,
+            };
+        }).filter((shrine) => shrine.levels.length)
+            .sort((left, right) => Number(right.isCombat) - Number(left.isCombat) || left.name.localeCompare(right.name));
+
+        return {
+            credits,
+            creditValues,
+            guildTokenRoutes: valuedTokenRoutes,
+            guildTokenValue,
+            shrines,
+            pricedLevelCount: shrines.flatMap((shrine) => shrine.levels).filter((level) => Number.isFinite(level.incrementalCost)).length,
+            levelCount: shrines.reduce((sum, shrine) => sum + shrine.levels.length, 0),
+        };
+    }
+
     function getTrialName(trialHrid, trialDetails = {}, skillDetails = {}) {
         const detail = trialDetails[trialHrid] || {};
         const skillHrid = detail.skillHrid || "";
@@ -458,6 +674,7 @@
         const skilling = skillingHrids.map((hrid) => makeTrial(hrid, "skilling"));
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
         const recommendations = buildSkillingRecommendations(currentMembers, skilling);
+        const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
         const highLevelSkillGaps = skilling.map((trial) => ({
             trialHrid: trial.trialHrid,
             trialName: trial.name,
@@ -497,6 +714,7 @@
             skilling,
             combat,
             recommendations,
+            medianSuggestions,
             highLevelSkillGaps,
             auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
@@ -564,6 +782,34 @@
         });
     }
 
+    function buildMedianTrialSuggestions(members, trials, aggregateSkills) {
+        if (!trials.length) return [];
+        const medianBySkill = new Map((Array.isArray(aggregateSkills) ? aggregateSkills : []).map((skill) => [skill.skillHrid, skill.median]));
+        return members.map((member) => {
+            const options = trials.map((trial) => {
+                const level = getProfileSkillLevel(member, trial.skillHrid);
+                const guildMedian = medianBySkill.get(trial.skillHrid);
+                return {
+                    trialHrid: trial.trialHrid,
+                    trialName: trial.name,
+                    skillHrid: trial.skillHrid,
+                    level,
+                    guildMedian,
+                    medianDifference: Number.isFinite(level) && Number.isFinite(guildMedian) ? level - guildMedian : null,
+                };
+            }).filter((option) => Number.isFinite(option.level) && Number.isFinite(option.guildMedian) && trialAllowsLevel(trials.find((trial) => trial.trialHrid === option.trialHrid), option.level))
+                .sort((left, right) => right.medianDifference - left.medianDifference || right.level - left.level || left.trialName.localeCompare(right.trialName));
+            if (!options.length) return null;
+            return {
+                memberId: member.id,
+                memberName: member.name,
+                currentTrialHrid: member.currentSkillingTrialHrid,
+                first: options[0],
+                second: options[1] || null,
+            };
+        }).filter(Boolean).sort((left, right) => left.memberName.localeCompare(right.memberName));
+    }
+
     function trialAllowsLevel(trial, level) {
         return !trial.minLevel || level >= trial.minLevel;
     }
@@ -578,6 +824,7 @@
             skills: aggregate.skills.reduce((result, skill) => {
                 result[skill.skillHrid] = {
                     average: Number(skill.average.toFixed(4)),
+                    median: skill.median,
                     minLevel: skill.minLevel,
                     maxLevel: skill.maxLevel,
                     maxMembers: skill.maxMembers,
@@ -650,6 +897,7 @@
         DAY_MS,
         TOTAL_LEVEL_HRID,
         aggregateGuild,
+        analyzeGuildEconomy,
         analyzeTrials,
         asObject,
         buildMemberTracking,
@@ -658,10 +906,13 @@
         getProfileIdentity,
         getAuraAssignment,
         getAuraDefinition,
+        getItemName,
+        getMarketQuote,
         getOfflineDurationMs,
         getSkillName,
         getTrialName,
         makeSnapshot,
+        median,
         normalizeName,
         normalizeProfile,
         normalizeRoster,
@@ -670,6 +921,7 @@
         prettifyHrid,
         recordWeeklyTrialParticipation,
         resolveGuildWeekStart,
+        extractGuildBuffLevels,
         strongestSkill,
         toTimestamp,
         toCsv,
@@ -680,8 +932,10 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.5.0";
+    const SCRIPT_VERSION = "0.6.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
+    const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
+    const MARKET_REFRESH_MS = 65 * 60_000;
     const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
     const state = {
         guild: null,
@@ -691,6 +945,15 @@ function startGuildMonitor(Core) {
         guildWeeklyTrialSet: { skillHrids: [], combatHrids: [] },
         guildTrialDetails: {},
         skillDetails: {},
+        itemDetails: {},
+        guildBuffDetails: {},
+        guildBuffLevels: {},
+        marketData: {},
+        marketItemValues: {},
+        marketTimestamp: null,
+        marketFetchedAt: null,
+        marketLoading: false,
+        marketError: "",
         ownCharacter: null,
         guildStore: null,
         isOpen: false,
@@ -719,6 +982,76 @@ function startGuildMonitor(Core) {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
         } catch (error) {
             console.warn("[MWI Guild Monitor] Could not save local data.", error);
+        }
+    }
+
+    function getMarketDataUrl() {
+        const hostname = String(pageWindow.location && pageWindow.location.hostname || "");
+        if (hostname.startsWith("test.")) return "https://test.milkywayidle.com/game_data/marketplace.json";
+        if (hostname.endsWith("milkywayidlecn.com")) return "https://milkywayidlecn.com/game_data/marketplace.json";
+        return "https://www.milkywayidle.com/game_data/marketplace.json";
+    }
+
+    function applyMarketData(payload, fetchedAt = Date.now()) {
+        if (!payload || !payload.marketData || typeof payload.marketData !== "object") return false;
+        state.marketData = payload;
+        state.marketFetchedAt = fetchedAt;
+        state.marketTimestamp = Core.toTimestamp(payload.timestamp) || fetchedAt;
+        state.marketError = "";
+        return true;
+    }
+
+    function readMarketCache() {
+        try {
+            const cached = JSON.parse(localStorage.getItem(MARKET_STORAGE_KEY) || "null");
+            if (cached && cached.version === 1 && applyMarketData(cached.payload, Number(cached.fetchedAt) || 0)) return cached;
+        } catch (_error) {
+            // A broken or old cache is replaced by the next official market response.
+        }
+        return null;
+    }
+
+    function writeMarketCache(payload, fetchedAt) {
+        try {
+            localStorage.setItem(MARKET_STORAGE_KEY, JSON.stringify({ version: 1, fetchedAt, payload }));
+        } catch (error) {
+            console.warn("[MWI Guild Monitor] Could not cache market data.", error);
+        }
+    }
+
+    async function refreshMarketData(force = false) {
+        if (state.marketLoading) return;
+        const cached = readMarketCache();
+        if (!force && cached && Date.now() - cached.fetchedAt < MARKET_REFRESH_MS) {
+            queueRender();
+            return;
+        }
+        if (typeof pageWindow.fetch !== "function") {
+            state.marketError = "Market fetch is unavailable in this browser.";
+            queueRender();
+            return;
+        }
+
+        state.marketLoading = true;
+        state.marketError = "";
+        queueRender();
+        try {
+            const response = await pageWindow.fetch(getMarketDataUrl(), {
+                method: "GET",
+                credentials: "omit",
+                cache: "no-store",
+            });
+            if (!response.ok) throw new Error(`Market request failed (${response.status})`);
+            const payload = await response.json();
+            const fetchedAt = Date.now();
+            if (!applyMarketData(payload, fetchedAt)) throw new Error("Market response was missing marketData");
+            writeMarketCache(payload, fetchedAt);
+        } catch (error) {
+            state.marketError = error && error.message ? error.message : "Market prices could not be loaded.";
+            console.warn("[MWI Guild Monitor] Could not load official market prices.", error);
+        } finally {
+            state.marketLoading = false;
+            queueRender();
         }
     }
 
@@ -821,6 +1154,9 @@ function startGuildMonitor(Core) {
             case "init_client_data":
                 state.skillDetails = message.skillDetailMap || message.skillDetailDict || state.skillDetails;
                 state.guildTrialDetails = message.guildTrialDetailMap || state.guildTrialDetails;
+                state.itemDetails = message.itemDetailMap || state.itemDetails;
+                state.guildBuffDetails = message.guildBuffDetailMap || state.guildBuffDetails;
+                void refreshMarketData();
                 break;
             case "init_character_data":
                 state.guild = message.guild || null;
@@ -838,10 +1174,12 @@ function startGuildMonitor(Core) {
                         characterSkills: message.characterSkills,
                     });
                 }
+                state.guildBuffLevels = Core.extractGuildBuffLevels(message, state.guildBuffLevels);
                 break;
             case "guild_updated":
                 state.guild = message.guild || null;
                 state.guildWeeklyTrialSet = message.guildWeeklyTrialSet || state.guildWeeklyTrialSet;
+                state.guildBuffLevels = Core.extractGuildBuffLevels(message, state.guildBuffLevels);
                 if (state.guild) ensureGuildStore();
                 break;
             case "guild_characters_updated":
@@ -877,6 +1215,12 @@ function startGuildMonitor(Core) {
                 break;
             case "skills_updated":
                 mergeOwnSkillUpdates(message.endCharacterSkills || []);
+                break;
+            case "market_item_values_updated":
+                state.marketItemValues = message.marketItemValues || state.marketItemValues;
+                break;
+            case "guild_buffs_updated":
+                state.guildBuffLevels = Core.extractGuildBuffLevels(message, state.guildBuffLevels);
                 break;
             default:
                 return;
@@ -1017,6 +1361,11 @@ function startGuildMonitor(Core) {
             .mwigm-aura-select { width: 100%; min-width: 110px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
             .mwigm-aura-missing { color: #efbd70; }
             .mwigm-aura-duplicate { color: #ef8f82; }
+            .mwigm-economy-table { min-width: 800px; }
+            .mwigm-shrine-table { min-width: 860px; }
+            .mwigm-price-source { color: #8fa0b7; font-size: 10px; text-transform: uppercase; }
+            .mwigm-price-best { color: #77d2b2; }
+            .mwigm-purchased { color: #77d2b2; }
             .mwigm-footer { padding: 8px 12px; color: #8190a6; font-size: 11px; border-top: 1px solid #31415c; }
             @media (max-width: 620px) {
                 #${SCRIPT_ID}-panel { top: 0; right: 0; bottom: 0; width: 100vw; border-radius: 0; }
@@ -1070,11 +1419,12 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="members">Members</button>
                 <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
+                <button class="mwigm-tab" type="button" data-tab="shrines">Shrines</button>
                 <button class="mwigm-tab" type="button" data-tab="missing">Missing profiles</button>
             </nav>
             <div class="mwigm-toolbar"></div>
             <div class="mwigm-content"></div>
-            <footer class="mwigm-footer">Read-only. Data stays in this browser and updates when profiles are viewed.</footer>
+            <footer class="mwigm-footer">Read-only. Guild data stays in this browser; prices come from the official market feed.</footer>
         `;
 
         panel.addEventListener("click", handlePanelClick);
@@ -1109,6 +1459,16 @@ function startGuildMonitor(Core) {
             state.guildStore ? state.guildStore.trialHistory : {},
             Core.resolveGuildWeekStart(state.guild),
         );
+    }
+
+    function currentGuildEconomy() {
+        return Core.analyzeGuildEconomy({
+            itemDetails: state.itemDetails,
+            guildBuffDetails: state.guildBuffDetails,
+            guildBuffLevels: state.guildBuffLevels,
+            marketData: state.marketData,
+            marketItemValues: state.marketItemValues,
+        });
     }
 
     function render() {
@@ -1148,9 +1508,15 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : "Find a member";
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
+        if (state.activeTab === "shrines") {
+            return `
+                <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
+                <button class="mwigm-command mwigm-command-primary" type="button" data-action="refresh-market" ${state.marketLoading ? "disabled" : ""}>${state.marketLoading ? "Refreshing" : "Refresh prices"}</button>
+            `;
+        }
         const sortOptions = state.activeTab === "skills"
-            ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
+            ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
             : state.activeTab === "trials"
             ? `<option value="name">Trial or member</option><option value="gap">Needs review first</option>`
             : state.activeTab === "auras"
@@ -1177,6 +1543,7 @@ function startGuildMonitor(Core) {
         if (state.activeTab === "members") return renderMembers(aggregate);
         if (state.activeTab === "trials") return renderTrials(aggregate);
         if (state.activeTab === "auras") return renderAuras(aggregate);
+        if (state.activeTab === "shrines") return renderShrines();
         if (state.activeTab === "missing") return renderMissing(aggregate);
         return renderSkills(aggregate);
     }
@@ -1219,7 +1586,7 @@ function startGuildMonitor(Core) {
                 <div class="mwigm-skill-row" title="Minimum: ${escapeHtml(skill.minMembers.join(", "))}">
                     <div class="mwigm-skill-primary">
                         <span class="mwigm-skill-name">${escapeHtml(skill.name)}</span>
-                        <span>${skill.sampleSize} member${skill.sampleSize === 1 ? "" : "s"} · Average ${skill.average.toFixed(1)} · Minimum ${skill.minLevel}</span>
+                        <span>${skill.sampleSize} member${skill.sampleSize === 1 ? "" : "s"} · Average ${skill.average.toFixed(1)} · Median ${Number.isFinite(skill.median) ? skill.median.toFixed(1) : "--"} · Minimum ${skill.minLevel}</span>
                         <span title="${escapeHtml(maxNames)}">Highest ${skill.maxLevel} · ${escapeHtml(maxNames)}</span>
                     </div>
                     ${thresholdStat(100)}
@@ -1332,6 +1699,23 @@ function startGuildMonitor(Core) {
                 <td><span class="mwigm-chip ${entry.isAligned ? "mwigm-chip-good" : "mwigm-chip-warn"}">${entry.isAligned ? "Aligned" : "Review"}</span></td>
             </tr>
         `).join("");
+        const medianRows = analysis.medianSuggestions.filter((entry) =>
+            entry.memberName.toLocaleLowerCase().includes(query) ||
+            entry.first.trialName.toLocaleLowerCase().includes(query) ||
+            (entry.second && entry.second.trialName.toLocaleLowerCase().includes(query)),
+        ).map((entry) => {
+            const currentName = entry.currentTrialHrid ? Core.getTrialName(entry.currentTrialHrid, state.guildTrialDetails, state.skillDetails) : "Not signed up";
+            const status = entry.currentTrialHrid === entry.first.trialHrid ? "First choice" : entry.second && entry.currentTrialHrid === entry.second.trialHrid ? "Second choice" : entry.currentTrialHrid ? "Other choice" : "Unsigned";
+            const statusClass = status === "First choice" || status === "Second choice" ? "mwigm-chip-good" : "mwigm-chip-warn";
+            return `
+                <tr>
+                    <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">Current: ${escapeHtml(currentName)}</span></td>
+                    <td>${renderMedianChoice(entry.first)}</td>
+                    <td>${entry.second ? renderMedianChoice(entry.second) : "--"}</td>
+                    <td><span class="mwigm-chip ${statusClass}">${status}</span></td>
+                </tr>
+            `;
+        }).join("");
 
         return `
             ${overview}
@@ -1341,10 +1725,18 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
+            <div class="mwigm-section-title">Median-fit choices <span>First and second skill relative to the captured guild median</span></div>
+            <div class="mwigm-notice">Choices rank each member by level minus the guild median for this week's eligible trial skills. Positive values indicate a level above the captured guild median; roster balance and availability are not included.</div>
+            <table class="mwigm-table"><thead><tr><th style="width:28%">Member</th><th>First choice</th><th>Second choice</th><th>Current fit</th></tr></thead><tbody>${medianRows}</tbody></table>
             <div class="mwigm-section-title">Skilling allocation suggestions <span>Current skilling rosters and members with no trial signup</span></div>
             <div class="mwigm-notice">Suggestions divide captured, eligible members across this week's skilling trials, prioritizing each member's strongest relevant skill. They are planning hints, not predictions; stale profiles, equipment, buffs, and availability are not modeled.</div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Suggested</th><th>Status</th></tr></thead><tbody>${recommendationRows}</tbody></table>
         `;
+    }
+
+    function renderMedianChoice(choice) {
+        const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
+        return `${escapeHtml(choice.trialName)} <span class="mwigm-subtext">Lv ${formatCompactDecimal(choice.level)} · ${difference} vs median ${formatCompactDecimal(choice.guildMedian)}</span>`;
     }
 
     function renderTrialRow(trial, isCombat) {
@@ -1433,6 +1825,72 @@ function startGuildMonitor(Core) {
         `;
     }
 
+    function renderShrines() {
+        if (!Object.keys(state.itemDetails).length || !Object.keys(state.guildBuffDetails).length) {
+            return emptyState("Waiting for guild economy data", "Reload Milky Way Idle so item conversions and shrine definitions can be captured.");
+        }
+
+        const economy = currentGuildEconomy();
+        const query = state.query.toLocaleLowerCase();
+        const marketLabel = state.marketLoading ? "Refreshing" : state.marketTimestamp ? formatRelativeTime(state.marketTimestamp) : "Unavailable";
+        const overview = `
+            <div class="mwigm-status">
+                ${metric("Market updated", marketLabel)}
+                ${metric("Credit types", economy.credits.length)}
+                ${metric("Guild token value", Number.isFinite(economy.guildTokenValue) ? formatCoins(economy.guildTokenValue) : "--")}
+                ${metric("Shrine levels priced", `${economy.pricedLevelCount}/${economy.levelCount}`)}
+            </div>
+        `;
+        const errorNotice = state.marketError ? `<div class="mwigm-notice"><strong>Market update failed:</strong> ${escapeHtml(state.marketError)} Cached prices remain in use when available.</div>` : "";
+        const sourceNotice = `<div class="mwigm-notice">Conversion rankings use the official market feed. Current asks are preferred; rows marked Fair or Bid are estimates because no ask was available. Rankings do not model order-book depth. Guild-token value uses its most valuable credit conversion, so shrine totals represent opportunity cost rather than a direct token purchase price.</div>`;
+        const creditRows = economy.credits.filter((credit) =>
+            credit.creditName.toLocaleLowerCase().includes(query) || credit.options.some((option) => option.itemName.toLocaleLowerCase().includes(query)),
+        ).map((credit) => {
+            const best = credit.bestOption;
+            const alternatives = credit.options.filter((option) => option.available).slice(1, 4);
+            return `
+                <tr>
+                    <td><span class="mwigm-trial-name">${escapeHtml(credit.creditName)}</span><br><span class="mwigm-subtext">${credit.options.length} conversion option${credit.options.length === 1 ? "" : "s"}</span></td>
+                    <td>${best ? `<span class="mwigm-price-best">${escapeHtml(best.itemName)}</span>` : "No priced item"}</td>
+                    <td>${best ? `${formatExactNumber(best.itemCount)} items → ${formatExactNumber(best.creditCount)} credits` : "--"}</td>
+                    <td>${best ? `${formatCoins(best.unitPrice)}<br><span class="mwigm-price-source">${escapeHtml(best.source)}</span>` : "--"}</td>
+                    <td>${best ? formatCoins(best.costPerCredit) : "--"}</td>
+                    <td>${alternatives.length ? alternatives.map((option) => `${escapeHtml(option.itemName)} ${formatCoins(option.costPerCredit)}`).join("<br>") : "--"}</td>
+                </tr>
+            `;
+        }).join("");
+        const shrineRows = economy.shrines.flatMap((shrine) => shrine.levels.map((level) => ({ shrine, level })))
+            .filter(({ shrine, level }) => {
+                const ingredients = [level.guildTokenCost ? "guild token" : "", ...level.creditCosts.map((entry) => entry.itemName)].join(" ").toLocaleLowerCase();
+                return shrine.name.toLocaleLowerCase().includes(query) || ingredients.includes(query);
+            })
+            .map(({ shrine, level }) => {
+                const ingredients = [
+                    level.guildTokenCost ? `${formatExactNumber(level.guildTokenCost)} Guild Token` : "",
+                    ...level.creditCosts.map((entry) => `${formatExactNumber(entry.count)} ${entry.itemName}`),
+                ].filter(Boolean).join(" + ") || "No currency cost";
+                return `
+                    <tr>
+                        <td><span class="mwigm-trial-name">${escapeHtml(shrine.name)}</span><br><span class="mwigm-subtext">${shrine.isCombat ? "Combat" : "Skilling"} · current level ${shrine.currentLevel}</span></td>
+                        <td>Level ${level.level}${level.purchased ? ` <span class="mwigm-chip mwigm-chip-good">Purchased</span>` : ""}</td>
+                        <td title="${escapeHtml(ingredients)}">${escapeHtml(ingredients)}</td>
+                        <td>${Number.isFinite(level.incrementalCost) ? formatCoins(level.incrementalCost) : "--"}</td>
+                        <td>${Number.isFinite(level.cumulativeCost) ? formatCoins(level.cumulativeCost) : "--"}</td>
+                    </tr>
+                `;
+            }).join("");
+
+        return `
+            ${overview}
+            ${errorNotice}
+            ${sourceNotice}
+            <div class="mwigm-section-title">Optimal credit conversions <span>Lowest estimated coins per guild credit</span></div>
+            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows}</tbody></table>
+            <div class="mwigm-section-title">Shrine level estimates <span>Incremental and cumulative opportunity cost</span></div>
+            <table class="mwigm-table mwigm-shrine-table"><thead><tr><th style="width:22%">Shrine</th><th>Level</th><th style="width:30%">Currency cost</th><th>Incremental coins</th><th>Cumulative coins</th></tr></thead><tbody>${shrineRows}</tbody></table>
+        `;
+    }
+
     function renderMissing(aggregate) {
         if (!aggregate.missingMembers.length) {
             return emptyState("Full coverage", "Every current guild member has a cached profile.");
@@ -1457,6 +1915,7 @@ function startGuildMonitor(Core) {
     function sortSkills(skills) {
         const copy = [...skills];
         if (state.sort === "average") return copy.sort((a, b) => b.average - a.average || a.name.localeCompare(b.name));
+        if (state.sort === "median") return copy.sort((a, b) => (b.median ?? -1) - (a.median ?? -1) || a.name.localeCompare(b.name));
         if (state.sort === "max") return copy.sort((a, b) => b.maxLevel - a.maxLevel || a.name.localeCompare(b.name));
         if (state.sort === "min") return copy.sort((a, b) => a.minLevel - b.minLevel || a.name.localeCompare(b.name));
         return copy.sort((a, b) => {
@@ -1522,6 +1981,9 @@ function startGuildMonitor(Core) {
                 break;
             case "export":
                 exportCsv();
+                break;
+            case "refresh-market":
+                void refreshMarketData(true);
                 break;
         }
     }
@@ -1592,6 +2054,21 @@ function startGuildMonitor(Core) {
 
     function formatNumber(value) {
         return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(Number(value) || 0);
+    }
+
+    function formatCoins(value) {
+        if (!Number.isFinite(Number(value))) return "--";
+        return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 2 }).format(Number(value));
+    }
+
+    function formatExactNumber(value) {
+        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(Number(value) || 0);
+    }
+
+    function formatCompactDecimal(value) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return "--";
+        return Number.isInteger(number) ? String(number) : number.toFixed(1);
     }
 
     function formatDelta(value) {

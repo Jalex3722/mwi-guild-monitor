@@ -56,6 +56,7 @@ test("calculates average, minimum, maximum, and coverage", () => {
     assert.equal(result.coverage, 2 / 3);
     assert.equal(result.missingMembers[0].name, "Curie");
     assert.equal(cooking.average, 60);
+    assert.equal(cooking.median, 60);
     assert.equal(cooking.minLevel, 40);
     assert.equal(cooking.maxLevel, 80);
     assert.deepEqual(cooking.minMembers, ["Babbage"]);
@@ -299,4 +300,94 @@ test("includes offline and prior-week status in CSV exports", () => {
 
     assert.match(csv, /Offline Days,Offline 3\+ Days,Previous Week Trial/);
     assert.match(csv, /4\.0,Yes,Missed/);
+});
+
+test("ranks guild-credit conversions and prices shrine levels", () => {
+    const economy = Core.analyzeGuildEconomy({
+        itemDetails: {
+            "/items/apple": {
+                name: "Apple",
+                guildCreditConversions: [{ creditItemHrid: "/items/green_credit", itemCount: 10, creditCount: 5 }],
+            },
+            "/items/log": {
+                name: "Log",
+                guildCreditConversions: [{ creditItemHrid: "/items/green_credit", itemCount: 4, creditCount: 4 }],
+            },
+            "/items/gem": {
+                name: "Gem",
+                guildCreditConversions: [{ creditItemHrid: "/items/purple_credit", itemCount: 2, creditCount: 1 }],
+            },
+            "/items/green_credit": { name: "Green Guild Credit" },
+            "/items/purple_credit": { name: "Purple Guild Credit" },
+            "/items/guild_token": {
+                name: "Guild Token",
+                guildCreditConversions: [
+                    { creditItemHrid: "/items/green_credit", guildTokenCount: 1, creditCount: 10 },
+                    { creditItemHrid: "/items/purple_credit", guildTokenCount: 1, creditCount: 2 },
+                ],
+            },
+        },
+        marketData: {
+            marketData: {
+                "/items/apple": { 0: { a: 20, b: 18 } },
+                "/items/log": { 0: { a: 30, b: 28 } },
+                "/items/gem": { 0: { a: 50, b: 45 } },
+            },
+        },
+        guildBuffDetails: {
+            "/guild_buffs/force": {
+                name: "Force Shrine",
+                isCombat: true,
+                levelCosts: [
+                    null,
+                    { guildTokenCost: 2, creditCosts: [{ itemHrid: "/items/green_credit", count: 3 }] },
+                    { guildTokenCost: 0, creditCosts: [{ itemHrid: "/items/purple_credit", count: 4 }] },
+                ],
+            },
+        },
+        guildBuffLevels: { "/guild_buffs/force": 1 },
+    });
+    const green = economy.credits.find((credit) => credit.creditHrid === "/items/green_credit");
+    const force = economy.shrines[0];
+
+    assert.equal(green.bestOption.itemName, "Log");
+    assert.equal(green.bestOption.costPerCredit, 30);
+    assert.equal(economy.creditValues["/items/purple_credit"], 100);
+    assert.equal(economy.guildTokenValue, 300);
+    assert.equal(force.currentLevel, 1);
+    assert.equal(force.levels[0].incrementalCost, 690);
+    assert.equal(force.levels[0].purchased, true);
+    assert.equal(force.levels[1].incrementalCost, 400);
+    assert.equal(force.levels[1].cumulativeCost, 1090);
+});
+
+test("suggests first and second trial skills relative to guild medians", () => {
+    const members = [
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "mine" },
+        { id: "3", name: "Curie", signedUpSkillingTrialHrid: "" },
+    ];
+    const memberProfiles = {
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 150 }, { skillHrid: "/skills/mining", level: 100 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 100 }, { skillHrid: "/skills/mining", level: 150 }] },
+        3: { id: "3", name: "Curie", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 120 }, { skillHrid: "/skills/mining", level: 120 }] },
+    };
+    const aggregate = Core.aggregateGuild(members, memberProfiles);
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
+        trialDetails: {
+            cook: { skillHrid: "/skills/cooking" },
+            mine: { skillHrid: "/skills/mining" },
+        },
+    });
+    const ada = analysis.medianSuggestions.find((entry) => entry.memberName === "Ada");
+    const babbage = analysis.medianSuggestions.find((entry) => entry.memberName === "Babbage");
+
+    assert.equal(aggregate.skills.find((skill) => skill.skillHrid === "/skills/cooking").median, 120);
+    assert.equal(ada.first.trialHrid, "cook");
+    assert.equal(ada.first.medianDifference, 30);
+    assert.equal(ada.second.trialHrid, "mine");
+    assert.equal(babbage.first.trialHrid, "mine");
+    assert.equal(babbage.second.trialHrid, "cook");
 });

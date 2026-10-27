@@ -20,6 +20,18 @@
                 this.url = url;
             }
         };
+        window.fetch = async () => ({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                timestamp: Math.floor(Date.now() / 1000),
+                marketData: {
+                    "/items/apple": { 0: { a: 28, b: 27, p: 27.5 } },
+                    "/items/arcane_log": { 0: { a: 310, b: 300, p: 305 } },
+                    "/items/amethyst": { 0: { a: 36000, b: 35000, p: 35500 } },
+                },
+            }),
+        });
     </script>
     <script src="../mwi-guild-monitor.user.js"></script>
 </head>
@@ -103,6 +115,32 @@
                     "/guild_combat/badger": { kind: "combat" },
                     "/guild_combat/swarm": { kind: "combat" },
                 },
+                itemDetailMap: {
+                    "/items/apple": { name: "Apple", guildCreditConversions: [{ creditItemHrid: "/items/green_guild_credit", itemCount: 20, creditCount: 5 }] },
+                    "/items/arcane_log": { name: "Arcane Log", guildCreditConversions: [{ creditItemHrid: "/items/green_guild_credit", itemCount: 1, creditCount: 4 }] },
+                    "/items/amethyst": { name: "Amethyst", guildCreditConversions: [{ creditItemHrid: "/items/purple_guild_credit", itemCount: 2, creditCount: 1 }] },
+                    "/items/green_guild_credit": { name: "Green Guild Credit" },
+                    "/items/purple_guild_credit": { name: "Purple Guild Credit" },
+                    "/items/guild_token": {
+                        name: "Guild Token",
+                        guildCreditConversions: [
+                            { creditItemHrid: "/items/green_guild_credit", guildTokenCount: 1, creditCount: 10 },
+                            { creditItemHrid: "/items/purple_guild_credit", guildTokenCount: 1, creditCount: 1 },
+                        ],
+                    },
+                },
+                guildBuffDetailMap: {
+                    "/guild_buffs/force": {
+                        name: "Force Shrine",
+                        isCombat: true,
+                        levelCosts: [null, { guildTokenCost: 2, creditCosts: [{ itemHrid: "/items/green_guild_credit", count: 30 }] }, { guildTokenCost: 3, creditCosts: [{ itemHrid: "/items/purple_guild_credit", count: 4 }] }],
+                    },
+                    "/guild_buffs/scholar": {
+                        name: "Scholar Shrine",
+                        isCombat: false,
+                        levelCosts: [null, { guildTokenCost: 1, creditCosts: [{ itemHrid: "/items/green_guild_credit", count: 20 }] }],
+                    },
+                },
             });
             send({
                 type: "init_character_data",
@@ -117,6 +155,7 @@
                 },
                 character: { id: 1, name: "Ada" },
                 characterSkills: skills(1, 1812, 154, 136),
+                characterGuildBuffLevelMap: { "/guild_buffs/force": 1, "/guild_buffs/scholar": 0 },
             });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 2, name: "Babbage" }, characterSkills: skills(2, 1691, 129, 151) } });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 3, name: "Curie" }, characterSkills: skills(3, 1744, 99, 138) } });
