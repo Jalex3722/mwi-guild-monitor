@@ -246,3 +246,57 @@ test("includes desired aura in CSV exports", () => {
     assert.match(csv, /Desired Aura/);
     assert.match(csv, /Critical Aura/);
 });
+
+test("flags only known offline durations of at least three days", () => {
+    const now = Date.UTC(2026, 9, 26, 12);
+    const members = [
+        { id: "1", name: "Online", isOnline: true, lastActiveAt: now - 10 * Core.DAY_MS },
+        { id: "2", name: "Recent", isOnline: false, lastActiveAt: now - 2 * Core.DAY_MS },
+        { id: "3", name: "Inactive", isOnline: false, lastActiveAt: now - 3 * Core.DAY_MS },
+        { id: "4", name: "Private", isOnline: false, hideOnlineStatus: true, lastActiveAt: now - 8 * Core.DAY_MS },
+    ];
+    const tracking = Core.buildMemberTracking(Core.aggregateGuild(members, {}), {}, null, now);
+    const byName = Object.fromEntries(tracking.map((entry) => [entry.memberName, entry]));
+
+    assert.equal(byName.Online.offlineDurationMs, null);
+    assert.equal(byName.Recent.offlineThreeDays, false);
+    assert.equal(byName.Inactive.offlineDurationMs, 3 * Core.DAY_MS);
+    assert.equal(byName.Inactive.offlineThreeDays, true);
+    assert.equal(byName.Private.offlineDurationMs, null);
+    assert.equal(byName.Private.offlineThreeDays, false);
+});
+
+test("stores weekly trial participation and reports previous-week misses", () => {
+    const currentWeek = Date.UTC(2026, 9, 23);
+    const previousWeek = currentWeek - 7 * Core.DAY_MS;
+    const priorAggregate = Core.aggregateGuild([
+        { id: "1", name: "Skiller", signedUpSkillingTrialHrid: "cooking", signupWeekStartAt: previousWeek },
+        { id: "2", name: "Fighter", signedUpCombatTrialHrid: "badger", signupWeekStartAt: previousWeek },
+        { id: "3", name: "Absent", signupWeekStartAt: previousWeek },
+    ], {});
+    const history = Core.recordWeeklyTrialParticipation({}, priorAggregate, previousWeek, previousWeek + Core.DAY_MS);
+    const currentAggregate = Core.aggregateGuild([
+        ...priorAggregate.members,
+        { id: "4", name: "Not Observed" },
+    ], {});
+    const tracking = Core.buildMemberTracking(currentAggregate, history, currentWeek, currentWeek + Core.DAY_MS);
+    const status = Object.fromEntries(tracking.map((entry) => [entry.memberName, entry.previousWeekStatus]));
+
+    assert.equal(status.Skiller, "participated");
+    assert.equal(status.Fighter, "participated");
+    assert.equal(status.Absent, "missed");
+    assert.equal(status["Not Observed"], "unknown");
+});
+
+test("includes offline and prior-week status in CSV exports", () => {
+    const aggregate = Core.aggregateGuild([roster[1]], profiles);
+    const csv = Core.toCsv(aggregate, {}, {}, {}, [{
+        memberId: "2",
+        offlineDurationMs: 4 * Core.DAY_MS,
+        offlineThreeDays: true,
+        previousWeekStatus: "missed",
+    }]);
+
+    assert.match(csv, /Offline Days,Offline 3\+ Days,Previous Week Trial/);
+    assert.match(csv, /4\.0,Yes,Missed/);
+});

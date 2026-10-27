@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.4.0
+// @version      0.5.0
 // @description  Read-only guild roster and skill statistics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -32,6 +32,8 @@
 
     const TOTAL_LEVEL_HRID = "/skills/total_level";
     const SKILL_THRESHOLDS = [100, 125, 150];
+    const DAY_MS = 86_400_000;
+    const WEEK_MS = 7 * DAY_MS;
     const AURA_DEFINITIONS = [
         { hrid: "/abilities/speed_aura", name: "Speed Aura", scalingSkillHrid: "/skills/attack" },
         { hrid: "/abilities/guardian_aura", name: "Guardian Aura", scalingSkillHrid: "/skills/defense" },
@@ -267,7 +269,12 @@
     function currentGuildWeekStart(timestamp = Date.now()) {
         const date = new Date(timestamp);
         const midnightUtc = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
-        return midnightUtc - ((date.getUTCDay() - 5 + 7) % 7) * 86_400_000;
+        return midnightUtc - ((date.getUTCDay() - 5 + 7) % 7) * DAY_MS;
+    }
+
+    function resolveGuildWeekStart(guild, now = Date.now()) {
+        const value = firstDefined(guild, ["currentWeekStartAt", "weekStartAt", "trialWeekStartAt"], null);
+        return toTimestamp(value) ?? currentGuildWeekStart(now);
     }
 
     function isCurrentSignup(member, guildWeekStartAt, now = Date.now()) {
@@ -277,6 +284,65 @@
         if (signupStart === null) return true;
         if (guildStart !== null) return signupStart === guildStart;
         return signupStart === currentGuildWeekStart(now);
+    }
+
+    function getOfflineDurationMs(member, now = Date.now()) {
+        if (!member || member.isOnline || member.hideOnlineStatus) return null;
+        const lastActiveAt = toTimestamp(member.lastActiveAt);
+        if (lastActiveAt === null || lastActiveAt > now) return null;
+        return now - lastActiveAt;
+    }
+
+    function recordWeeklyTrialParticipation(history, aggregate, weekStartAt, observedAt = Date.now()) {
+        const normalizedHistory = { ...asObject(history) };
+        const weekStart = toTimestamp(weekStartAt) ?? currentGuildWeekStart(observedAt);
+        const key = String(weekStart);
+        const previous = asObject(normalizedHistory[key]);
+        const previousMembers = asObject(previous.members);
+        const members = { ...previousMembers };
+
+        aggregate.members.forEach((member) => {
+            const active = isCurrentSignup(member, weekStart, observedAt);
+            members[String(member.id)] = {
+                memberName: member.name,
+                signedSkilling: active && Boolean(member.signedUpSkillingTrialHrid),
+                signedCombat: active && Boolean(member.signedUpCombatTrialHrid),
+                observedAt,
+            };
+        });
+
+        normalizedHistory[key] = {
+            weekStartAt: weekStart,
+            observedAt,
+            members,
+        };
+
+        return Object.fromEntries(Object.entries(normalizedHistory)
+            .sort(([left], [right]) => Number(left) - Number(right))
+            .slice(-12));
+    }
+
+    function getPreviousWeekTrialStatus(history, currentWeekStartAt, memberId) {
+        const currentWeekStart = toTimestamp(currentWeekStartAt);
+        if (currentWeekStart === null) return "unknown";
+        const previousWeek = asObject(history)[String(currentWeekStart - WEEK_MS)];
+        const member = previousWeek && asObject(previousWeek.members)[String(memberId)];
+        if (!member) return "unknown";
+        return member.signedSkilling || member.signedCombat ? "participated" : "missed";
+    }
+
+    function buildMemberTracking(aggregate, history = {}, currentWeekStartAt = null, now = Date.now()) {
+        const weekStart = toTimestamp(currentWeekStartAt) ?? currentGuildWeekStart(now);
+        return aggregate.members.map((member) => {
+            const offlineDurationMs = getOfflineDurationMs(member, now);
+            return {
+                memberId: member.id,
+                memberName: member.name,
+                offlineDurationMs,
+                offlineThreeDays: offlineDurationMs !== null && offlineDurationMs >= 3 * DAY_MS,
+                previousWeekStatus: getPreviousWeekTrialStatus(history, weekStart, member.id),
+            };
+        });
     }
 
     function getTrialName(trialHrid, trialDetails = {}, skillDetails = {}) {
@@ -544,11 +610,13 @@
             .sort((left, right) => right.capturedAt - left.capturedAt)[0] || null;
     }
 
-    function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}) {
+    function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}, memberTracking = []) {
         const skillHrids = aggregate.skills.map((skill) => skill.skillHrid);
-        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Aura", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
+        const trackingById = new Map((Array.isArray(memberTracking) ? memberTracking : []).map((entry) => [String(entry.memberId), entry]));
+        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Aura", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
         const rows = aggregate.members.map((member) => {
             const profile = member.profile;
+            const tracking = trackingById.get(String(member.id));
             const skillMap = new Map((profile ? profile.skills : []).map((skill) => [skill.skillHrid, skill.level]));
             return [
                 member.name,
@@ -556,6 +624,9 @@
                 member.experience,
                 member.weeklyExperience,
                 (getAuraDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
+                tracking && tracking.offlineDurationMs !== null ? (tracking.offlineDurationMs / DAY_MS).toFixed(1) : "",
+                tracking && tracking.offlineThreeDays ? "Yes" : "No",
+                tracking ? prettifyHrid(tracking.previousWeekStatus) : "Unknown",
                 member.signedUpSkillingTrialHrid ? getTrialName(member.signedUpSkillingTrialHrid, trialDetails, skillDetails) : "",
                 member.signedUpCombatTrialHrid ? getTrialName(member.signedUpCombatTrialHrid, trialDetails, skillDetails) : "",
                 member.signedUpCombatRoleHrid ? prettifyHrid(member.signedUpCombatRoleHrid) : "",
@@ -576,14 +647,18 @@
 
     return {
         AURA_DEFINITIONS,
+        DAY_MS,
         TOTAL_LEVEL_HRID,
         aggregateGuild,
         analyzeTrials,
         asObject,
+        buildMemberTracking,
         getPreviousSnapshot,
+        getPreviousWeekTrialStatus,
         getProfileIdentity,
         getAuraAssignment,
         getAuraDefinition,
+        getOfflineDurationMs,
         getSkillName,
         getTrialName,
         makeSnapshot,
@@ -593,7 +668,10 @@
         normalizeSkills,
         parseJsonObject,
         prettifyHrid,
+        recordWeeklyTrialParticipation,
+        resolveGuildWeekStart,
         strongestSkill,
+        toTimestamp,
         toCsv,
     };
 });
@@ -602,7 +680,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.4.0";
+    const SCRIPT_VERSION = "0.5.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const pageWindow = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
     const state = {
@@ -658,9 +736,27 @@ function startGuildMonitor(Core) {
             profiles: previous.profiles || {},
             snapshots: Array.isArray(previous.snapshots) ? previous.snapshots : [],
             auraAssignments: previous.auraAssignments || {},
+            trialHistory: previous.trialHistory || {},
         };
         state.guildStore = store.guilds[key];
         return { store, key };
+    }
+
+    function captureTrialParticipation(observedAt = Date.now()) {
+        if (!state.guild) return;
+        const roster = Core.normalizeRoster(state.guildCharacterMap, state.guildSharableCharacterMap);
+        if (!roster.length) return;
+        const { store, key } = ensureGuildStore();
+        const aggregate = Core.aggregateGuild(roster, store.guilds[key].profiles, state.skillDetails);
+        const weekStart = Core.resolveGuildWeekStart(state.guild, observedAt);
+        store.guilds[key].trialHistory = Core.recordWeeklyTrialParticipation(
+            store.guilds[key].trialHistory,
+            aggregate,
+            weekStart,
+            observedAt,
+        );
+        writeStore(store);
+        state.guildStore = store.guilds[key];
     }
 
     function setAuraAssignment(memberId, auraHrid) {
@@ -786,6 +882,10 @@ function startGuildMonitor(Core) {
                 return;
         }
 
+        if (["init_character_data", "guild_updated", "guild_characters_updated", "guild_trial_signup_updated"].includes(message.type)) {
+            captureTrialParticipation();
+        }
+
         queueRender();
     }
 
@@ -842,7 +942,7 @@ function startGuildMonitor(Core) {
             }
             #${SCRIPT_ID}-panel {
                 position: fixed; top: 12px; right: 12px; bottom: 12px; z-index: 2147483646;
-                width: min(760px, calc(100vw - 24px)); color: #e9eef7; background: #101827;
+                width: min(860px, calc(100vw - 24px)); color: #e9eef7; background: #101827;
                 border: 1px solid #40516f; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.55);
                 font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
                 display: flex; flex-direction: column; overflow: hidden;
@@ -878,7 +978,7 @@ function startGuildMonitor(Core) {
             .mwigm-table td { padding: 8px 10px; border-bottom: 1px solid #24334b; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .mwigm-table td:first-child { text-align: left; }
             .mwigm-table tbody tr:hover { background: #17243a; }
-            .mwigm-members-table { min-width: 680px; }
+            .mwigm-members-table { min-width: 820px; }
             .mwigm-skill-gap { color: #efbd70; }
             .mwigm-skill-list { border-top: 1px solid #31415c; }
             .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(58px, .5fr)) minmax(170px, 1.35fr) minmax(62px, .5fr); border-bottom: 1px solid #2b3a53; }
@@ -907,6 +1007,7 @@ function startGuildMonitor(Core) {
             .mwigm-chip { display: inline-block; padding: 1px 5px; border: 1px solid #536681; border-radius: 4px; color: #bdc9d9; font-size: 11px; white-space: nowrap; }
             .mwigm-chip-good { border-color: #3f9076; color: #77d2b2; }
             .mwigm-chip-warn { border-color: #9d7335; color: #efbd70; }
+            .mwigm-chip-alert { border-color: #a34f4f; color: #f19a91; }
             .mwigm-member-skills { display: block; color: #aebbd0; font-size: 11px; }
             .mwigm-aura-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid #31415c; }
             .mwigm-aura-summary { min-width: 0; padding: 9px 8px; border-right: 1px solid #31415c; text-align: center; }
@@ -1002,6 +1103,14 @@ function startGuildMonitor(Core) {
         });
     }
 
+    function currentMemberTracking(aggregate = currentAggregate()) {
+        return Core.buildMemberTracking(
+            aggregate,
+            state.guildStore ? state.guildStore.trialHistory : {},
+            Core.resolveGuildWeekStart(state.guild),
+        );
+    }
+
     function render() {
         const panel = document.getElementById(`${SCRIPT_ID}-panel`);
         const button = document.getElementById(`${SCRIPT_ID}-button`);
@@ -1046,6 +1155,8 @@ function startGuildMonitor(Core) {
             ? `<option value="name">Trial or member</option><option value="gap">Needs review first</option>`
             : state.activeTab === "auras"
             ? `<option value="name">Member name</option><option value="aura">Aura type</option><option value="unsigned">Unsigned first</option>`
+            : state.activeTab === "members"
+            ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option><option value="freshness">Oldest profile</option>`
             : `<option value="name">Member name</option><option value="total">Highest total</option><option value="freshness">Oldest profile</option>`;
 
         return `
@@ -1124,29 +1235,54 @@ function startGuildMonitor(Core) {
     }
 
     function renderMembers(aggregate) {
+        const tracking = currentMemberTracking(aggregate);
+        const trackingById = new Map(tracking.map((entry) => [String(entry.memberId), entry]));
         let members = aggregate.members.filter((member) => member.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
-        members = sortMembers(members);
+        members = sortMembers(members, trackingById);
+        const offlineCount = tracking.filter((entry) => entry.offlineThreeDays).length;
+        const missedCount = tracking.filter((entry) => entry.previousWeekStatus === "missed").length;
+        const knownPreviousCount = tracking.filter((entry) => entry.previousWeekStatus !== "unknown").length;
+        const hiddenCount = aggregate.members.filter((member) => member.hideOnlineStatus).length;
+        const overview = `
+            <div class="mwigm-status">
+                ${metric("Offline 3d+", offlineCount)}
+                ${metric("Missed last week", missedCount)}
+                ${metric("Prior week known", `${knownPreviousCount}/${aggregate.memberCount}`)}
+                ${metric("Hidden status", hiddenCount)}
+            </div>
+        `;
         const rows = members.map((member) => {
             const profile = member.profile;
+            const memberTracking = trackingById.get(String(member.id));
             const total = profile ? profile.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID) : null;
             const strongest = Core.strongestSkill(member, state.skillDetails);
             const auraHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
             const aura = Core.getAuraDefinition(auraHrid);
             const skillingTrial = member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const combatTrial = member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
-            const activity = member.isOnline ? "Online" : member.actionType ? Core.prettifyHrid(member.actionType) : member.lastActiveAt ? `Inactive ${formatRelativeTime(member.lastActiveAt)}` : "Offline";
+            const activity = member.isOnline
+                ? "Online"
+                : member.hideOnlineStatus
+                ? "Status hidden"
+                : memberTracking && memberTracking.offlineDurationMs !== null
+                ? `Offline ${formatElapsedDuration(memberTracking.offlineDurationMs)}`
+                : "Offline time unknown";
+            const previousWeekStatus = memberTracking ? memberTracking.previousWeekStatus : "unknown";
+            const previousWeekLabel = previousWeekStatus === "missed" ? "Missed" : previousWeekStatus === "participated" ? "Joined" : "Unknown";
+            const previousWeekClass = previousWeekStatus === "missed" ? "mwigm-chip-alert" : previousWeekStatus === "participated" ? "mwigm-chip-good" : "";
             return `
                 <tr>
-                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
+                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${memberTracking && memberTracking.offlineThreeDays ? ` <span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}<br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
                     <td title="Combat: ${escapeHtml(combatTrial)}${member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}">${escapeHtml(skillingTrial)}<br><span class="mwigm-subtext">${escapeHtml(combatTrial)}</span></td>
+                    <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span></td>
                     <td class="${profile ? "mwigm-muted" : "mwigm-missing"}">${profile ? formatRelativeTime(profile.capturedAt) : "Not viewed"}</td>
                 </tr>
             `;
         }).join("");
-        return `<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:27%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Trials</th><th>Profile</th></tr></thead><tbody>${rows}</tbody></table>`;
+        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th><th>Profile</th></tr></thead><tbody>${rows}</tbody></table>`;
     }
 
     function renderTrials(aggregate) {
@@ -1330,10 +1466,27 @@ function startGuildMonitor(Core) {
         });
     }
 
-    function sortMembers(members) {
+    function sortMembers(members, trackingById = new Map()) {
         const copy = [...members];
         if (state.sort === "total") {
             return copy.sort((a, b) => getTotalLevel(b) - getTotalLevel(a) || a.name.localeCompare(b.name));
+        }
+        if (state.sort === "offline") {
+            return copy.sort((a, b) => {
+                const left = trackingById.get(String(a.id));
+                const right = trackingById.get(String(b.id));
+                return (right && right.offlineDurationMs !== null ? right.offlineDurationMs : -1) -
+                    (left && left.offlineDurationMs !== null ? left.offlineDurationMs : -1) || a.name.localeCompare(b.name);
+            });
+        }
+        if (state.sort === "missed") {
+            const rank = { missed: 0, participated: 1, unknown: 2 };
+            return copy.sort((a, b) => {
+                const left = trackingById.get(String(a.id));
+                const right = trackingById.get(String(b.id));
+                return (rank[left ? left.previousWeekStatus : "unknown"] ?? 2) -
+                    (rank[right ? right.previousWeekStatus : "unknown"] ?? 2) || a.name.localeCompare(b.name);
+            });
         }
         if (state.sort === "freshness") {
             return copy.sort((a, b) => (a.profile ? a.profile.capturedAt : 0) - (b.profile ? b.profile.capturedAt : 0));
@@ -1404,7 +1557,13 @@ function startGuildMonitor(Core) {
     function exportCsv() {
         const aggregate = currentAggregate();
         if (!aggregate.coveredCount) return;
-        const csv = Core.toCsv(aggregate, state.skillDetails, state.guildTrialDetails, state.guildStore ? state.guildStore.auraAssignments : {});
+        const csv = Core.toCsv(
+            aggregate,
+            state.skillDetails,
+            state.guildTrialDetails,
+            state.guildStore ? state.guildStore.auraAssignments : {},
+            currentMemberTracking(aggregate),
+        );
         const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");
@@ -1442,11 +1601,21 @@ function startGuildMonitor(Core) {
     }
 
     function formatRelativeTime(timestamp) {
-        const elapsed = Date.now() - Number(timestamp || 0);
+        const parsed = Core.toTimestamp(timestamp);
+        if (parsed === null) return "Unknown";
+        const elapsed = Math.max(0, Date.now() - parsed);
         if (elapsed < 60_000) return "Just now";
         if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
-        if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
-        return `${Math.floor(elapsed / 86_400_000)}d ago`;
+        if (elapsed < Core.DAY_MS) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+        return `${Math.floor(elapsed / Core.DAY_MS)}d ago`;
+    }
+
+    function formatElapsedDuration(elapsed) {
+        if (elapsed < 3_600_000) return `${Math.max(1, Math.floor(elapsed / 60_000))}m`;
+        if (elapsed < Core.DAY_MS) return `${Math.floor(elapsed / 3_600_000)}h`;
+        const days = Math.floor(elapsed / Core.DAY_MS);
+        const hours = Math.floor((elapsed % Core.DAY_MS) / 3_600_000);
+        return hours ? `${days}d ${hours}h` : `${days}d`;
     }
 
     function slugify(value) {
