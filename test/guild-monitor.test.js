@@ -241,6 +241,103 @@ test("assigns single-trial members before flexible members", () => {
     ]);
 });
 
+test("globally maximizes the sum of balanced trial averages above guild medians", () => {
+    const trialHrids = ["cook", "mine", "brew"];
+    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing"];
+    const trialDetails = Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }]));
+    const roster = Array.from({ length: 5 }, (_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % 3] }));
+    let seed = 197;
+    const random = () => ((seed = (seed * 48271) % 2147483647) % 66) + 85;
+
+    for (let fixture = 0; fixture < 12; fixture += 1) {
+        const profiles = Object.fromEntries(roster.map((member) => [member.id, {
+            id: member.id,
+            name: member.name,
+            capturedAt: 1,
+            skills: skillHrids.map((skillHrid) => ({ skillHrid, level: random() })),
+        }]));
+        const aggregate = Core.aggregateGuild(roster, profiles);
+        const analysis = Core.analyzeTrials({
+            aggregate,
+            weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
+            trialDetails,
+        });
+        const medians = skillHrids.map((hrid) => aggregate.skills.find((skill) => skill.skillHrid === hrid).median);
+        const levels = roster.map((member) => skillHrids.map((hrid) => profiles[member.id].skills.find((skill) => skill.skillHrid === hrid).level));
+        const score = (choices) => {
+            const counts = trialHrids.map((_, trial) => choices.filter((choice) => choice === trial).length);
+            if (Math.max(...counts) - Math.min(...counts) > 1) return -Infinity;
+            return trialHrids.reduce((sum, _, trial) => sum + choices.reduce((total, choice, member) =>
+                total + (choice === trial ? levels[member][trial] - medians[trial] : 0), 0) / counts[trial], 0);
+        };
+        let maximum = -Infinity;
+        for (let encoded = 0; encoded < 3 ** roster.length; encoded += 1) {
+            let remaining = encoded;
+            const choices = roster.map(() => {
+                const choice = remaining % 3;
+                remaining = Math.floor(remaining / 3);
+                return choice;
+            });
+            maximum = Math.max(maximum, score(choices));
+        }
+        const recommended = roster.map((member) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === member.id).recommendedTrialHrid));
+        assert.ok(Math.abs(score(recommended) - maximum) < 1e-8, `fixture ${fixture}`);
+        assert.equal(analysis.allocationBalanced, true);
+    }
+});
+
+test("marks an infeasible even roster and retains every eligible member", () => {
+    const aggregate = Core.aggregateGuild([
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "cook" },
+    ], {
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 120 }, { skillHrid: "/skills/mining", level: 50 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 110 }, { skillHrid: "/skills/mining", level: 60 }] },
+    });
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
+        trialMinLevels: { cook: 90, mine: 100 },
+    });
+
+    assert.equal(analysis.allocationBalanced, false);
+    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.length), [2, 0]);
+    assert.equal(analysis.recommendations.length, 2);
+    assert.equal(analysis.optimalDistribution[0].actualAverageLevel, 115);
+    assert.equal(analysis.optimalDistribution[0].targetAverageLevel, 115);
+});
+
+test("global trial assignment respects level minimums", () => {
+    const trialHrids = ["cook", "mine", "brew"];
+    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing"];
+    const levels = [
+        [140, 90, 90],
+        [90, 140, 90],
+        [90, 90, 140],
+        [130, 120, 110],
+        [110, 130, 120],
+    ];
+    const roster = levels.map((_, index) => ({ id: String(index + 1), name: `Member ${index + 1}` }));
+    const profiles = Object.fromEntries(roster.map((member, index) => [member.id, {
+        id: member.id, name: member.name, capturedAt: 1,
+        skills: skillHrids.map((skillHrid, skill) => ({ skillHrid, level: levels[index][skill] })),
+    }]));
+    const aggregate = Core.aggregateGuild(roster, profiles);
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
+        trialDetails: Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }])),
+        trialMinLevels: { cook: 100, mine: 100, brew: 100 },
+    });
+    const choices = roster.map((member) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === member.id).recommendedTrialHrid));
+
+    assert.equal(analysis.allocationBalanced, true);
+    assert.deepEqual(choices.slice(0, 3), [0, 1, 2]);
+    choices.forEach((choice, member) => assert.ok(levels[member][choice] >= 100));
+    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.length).sort(), [1, 2, 2]);
+});
+
 test("tracks exact-one aura coverage for each combat trial", () => {
     const combatRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpCombatTrialHrid: "badger" },
@@ -463,6 +560,21 @@ test("finds nested guild buff levels", () => {
     });
     assert.equal(economy.shrines[0].currentLevel, 3);
     assert.equal(economy.shrines[0].levels[0].purchased, true);
+});
+
+test("extracts economy definitions from cached and wrapped client payloads", () => {
+    const definitions = Core.extractEconomyDefinitions(JSON.stringify({
+        data: {
+            initClientData: {
+                itemDetailMap: {},
+                itemDetailDict: { "/items/apple": { guildCreditConversions: [] } },
+                guildBuffDetailMap: {},
+                guildBuffDetailDict: { "/guild_buffs/force": { levelCosts: [null, {}] } },
+            },
+        },
+    }));
+    assert.ok(definitions.itemDetails["/items/apple"]);
+    assert.ok(definitions.guildBuffDetails["/guild_buffs/force"]);
 });
 
 test("suggests first and second trial skills relative to guild medians", () => {

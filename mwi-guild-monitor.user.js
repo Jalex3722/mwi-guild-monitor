@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.7.1
+// @version      0.8.0
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -435,6 +435,31 @@
         }, { ...asObject(existing) });
     }
 
+    function extractEconomyDefinitions(payload) {
+        const pending = [payload];
+        const visited = new Set();
+        let itemDetails = {};
+        let guildBuffDetails = {};
+
+        while (pending.length && visited.size < 24) {
+            const raw = pending.shift();
+            const value = typeof raw === "string" ? parseJsonObject(raw) : asObject(raw);
+            if (!Object.keys(value).length || visited.has(value)) continue;
+            visited.add(value);
+            const itemMap = asObject(value.itemDetailMap);
+            const buffMap = asObject(value.guildBuffDetailMap);
+            const items = Object.keys(itemMap).length ? itemMap : asObject(value.itemDetailDict);
+            const buffs = Object.keys(buffMap).length ? buffMap : asObject(value.guildBuffDetailDict);
+            if (Object.keys(items).length) itemDetails = items;
+            if (Object.keys(buffs).length) guildBuffDetails = buffs;
+            ["data", "payload", "message", "initClientData", "clientData", "gameData"].forEach((key) => {
+                if (value[key]) pending.push(value[key]);
+            });
+        }
+
+        return { itemDetails, guildBuffDetails };
+    }
+
     function analyzeGuildEconomy({
         itemDetails = {},
         guildBuffDetails = {},
@@ -678,13 +703,19 @@
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
         const recommendations = buildSkillingRecommendations(currentMembers, skilling, aggregate.skills);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
+        const memberById = new Map(currentMembers.map((member) => [String(member.id), member]));
         const optimalDistribution = skilling.map((trial) => {
             const assignments = recommendations.filter((entry) => entry.recommendedTrialHrid === trial.trialHrid)
                 .sort((left, right) => left.memberName.localeCompare(right.memberName));
+            const actualProfileLevels = trial.signups.map((entry) => getProfileSkillLevel(memberById.get(String(entry.memberId)), trial.skillHrid)).filter(Number.isFinite);
             return {
                 trialHrid: trial.trialHrid,
                 trialName: trial.name,
                 assignments,
+                actualSignups: trial.signups,
+                actualProfileCount: actualProfileLevels.length,
+                actualAverageLevel: actualProfileLevels.length ? actualProfileLevels.reduce((sum, level) => sum + level, 0) / actualProfileLevels.length : null,
+                targetAverageLevel: assignments.length ? assignments.reduce((sum, entry) => sum + entry.recommendedLevel, 0) / assignments.length : null,
                 aligned: assignments.filter((entry) => entry.currentTrialHrid === trial.trialHrid),
                 signedElsewhere: assignments.filter((entry) => entry.currentTrialHrid && entry.currentTrialHrid !== trial.trialHrid),
                 unsigned: assignments.filter((entry) => !entry.currentTrialHrid),
@@ -731,6 +762,7 @@
             recommendations,
             medianSuggestions,
             optimalDistribution,
+            allocationBalanced: optimalDistribution.length < 2 || Math.max(...optimalDistribution.map((trial) => trial.assignments.length)) - Math.min(...optimalDistribution.map((trial) => trial.assignments.length)) <= 1,
             highLevelSkillGaps,
             auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
@@ -761,28 +793,55 @@
             .filter((candidate) => candidate.options.length)
             .sort((left, right) => left.options.length - right.options.length || right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
 
+        if (!candidates.length) return [];
         const minPerTrial = Math.floor(candidates.length / trials.length);
         const maxPerTrial = Math.ceil(candidates.length / trials.length);
-        const recommendedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, 0]));
-        const assignments = [];
+        const extraSlots = candidates.length % trials.length;
+        let bestPlan = null;
 
-        candidates.forEach((candidate) => {
+        function considerQuotas(index, extrasLeft, quotas) {
+            if (index === trials.length) {
+                if (extrasLeft) return;
+                const plan = solveBalancedTrialAssignment(candidates, trials, quotas);
+                if (!plan) return;
+                if (!bestPlan || plan.score > bestPlan.score + 1e-9 ||
+                    (Math.abs(plan.score - bestPlan.score) <= 1e-9 && plan.alignedCount > bestPlan.alignedCount)) {
+                    bestPlan = plan;
+                }
+                return;
+            }
+            quotas[index] = minPerTrial;
+            considerQuotas(index + 1, extrasLeft, quotas);
+            if (extrasLeft) {
+                quotas[index] = maxPerTrial;
+                considerQuotas(index + 1, extrasLeft - 1, quotas);
+            }
+        }
+
+        considerQuotas(0, extraSlots, []);
+        const recommendedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, 0]));
+        const chosenOptions = bestPlan ? bestPlan.options : candidates.map((candidate) => {
             const option = candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < minPerTrial) ||
                 candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < maxPerTrial) ||
                 candidate.options[0];
             recommendedCounts[option.trial.trialHrid] += 1;
+            return option;
+        });
+
+        const assignments = candidates.map((candidate, index) => {
+            const option = chosenOptions[index];
             const currentHrid = candidate.member.currentSkillingTrialHrid;
             const currentTrial = trials.find((trial) => trial.trialHrid === currentHrid) || null;
             const currentLevel = currentTrial ? getProfileSkillLevel(candidate.member, currentTrial.skillHrid) : null;
             const isAligned = currentHrid === option.trial.trialHrid;
-            let reason = "Strongest median-relative fit in the balanced allocation";
+            let reason = bestPlan ? "Globally optimized balanced assignment" : "Eligibility-constrained fallback";
             if (!currentHrid) {
-                reason = "Not signed up; best balanced fit from captured levels";
+                reason = "Not signed up for a skilling trial";
             } else if (!isAligned) {
-                reason = `Signed for ${currentTrial ? currentTrial.name : "another trial"}; optimal distribution places them in ${option.trial.name}`;
+                reason = `Signed for ${currentTrial ? currentTrial.name : "another trial"}; target is ${option.trial.name}`;
             }
 
-            assignments.push({
+            return {
                 memberId: candidate.member.id,
                 memberName: candidate.member.name,
                 currentTrialHrid: currentHrid,
@@ -795,13 +854,81 @@
                 medianDifference: option.medianDifference,
                 isAligned,
                 reason,
-            });
+            };
         });
 
         return assignments.sort((left, right) => {
             if (left.isAligned !== right.isAligned) return left.isAligned ? 1 : -1;
             return left.memberName.localeCompare(right.memberName);
         });
+    }
+
+    function solveBalancedTrialAssignment(candidates, trials, quotas) {
+        const slots = trials.flatMap((trial, index) => Array(quotas[index]).fill(trial.trialHrid));
+        const size = candidates.length;
+        const unavailableCost = 1_000_000;
+        const quotaByTrial = new Map(trials.map((trial, index) => [trial.trialHrid, quotas[index]]));
+        const optionMaps = candidates.map((candidate) => new Map(candidate.options.map((option) => [option.trial.trialHrid, option])));
+        const costs = optionMaps.map((options) => slots.map((trialHrid) => {
+            const option = options.get(trialHrid);
+            if (!option) return unavailableCost;
+            return -option.medianDifference / quotaByTrial.get(trialHrid);
+        }));
+        const rowPotentials = Array(size + 1).fill(0);
+        const columnPotentials = Array(size + 1).fill(0);
+        const matchedRows = Array(size + 1).fill(0);
+        const previousColumns = Array(size + 1).fill(0);
+
+        for (let row = 1; row <= size; row += 1) {
+            matchedRows[0] = row;
+            const minimumCosts = Array(size + 1).fill(Infinity);
+            const used = Array(size + 1).fill(false);
+            let column = 0;
+            do {
+                used[column] = true;
+                const activeRow = matchedRows[column];
+                let adjustment = Infinity;
+                let nextColumn = 0;
+                for (let candidateColumn = 1; candidateColumn <= size; candidateColumn += 1) {
+                    if (used[candidateColumn]) continue;
+                    const reducedCost = costs[activeRow - 1][candidateColumn - 1] - rowPotentials[activeRow] - columnPotentials[candidateColumn];
+                    if (reducedCost < minimumCosts[candidateColumn]) {
+                        minimumCosts[candidateColumn] = reducedCost;
+                        previousColumns[candidateColumn] = column;
+                    }
+                    if (minimumCosts[candidateColumn] < adjustment) {
+                        adjustment = minimumCosts[candidateColumn];
+                        nextColumn = candidateColumn;
+                    }
+                }
+                for (let candidateColumn = 0; candidateColumn <= size; candidateColumn += 1) {
+                    if (used[candidateColumn]) {
+                        rowPotentials[matchedRows[candidateColumn]] += adjustment;
+                        columnPotentials[candidateColumn] -= adjustment;
+                    } else {
+                        minimumCosts[candidateColumn] -= adjustment;
+                    }
+                }
+                column = nextColumn;
+            } while (matchedRows[column]);
+            do {
+                const previous = previousColumns[column];
+                matchedRows[column] = matchedRows[previous];
+                column = previous;
+            } while (column);
+        }
+
+        const chosen = Array(size);
+        for (let column = 1; column <= size; column += 1) {
+            const row = matchedRows[column] - 1;
+            if (costs[row][column - 1] === unavailableCost) return null;
+            chosen[row] = optionMaps[row].get(slots[column - 1]);
+        }
+        return {
+            options: chosen,
+            score: chosen.reduce((sum, option) => sum + option.medianDifference / quotaByTrial.get(option.trial.trialHrid), 0),
+            alignedCount: chosen.filter((option, index) => option.trial.trialHrid === candidates[index].member.currentSkillingTrialHrid).length,
+        };
     }
 
     function buildMedianTrialSuggestions(members, trials, aggregateSkills) {
@@ -948,6 +1075,7 @@
         recordWeeklyTrialParticipation,
         resolveGuildWeekStart,
         extractGuildBuffLevels,
+        extractEconomyDefinitions,
         strongestSkill,
         toTimestamp,
         toCsv,
@@ -958,7 +1086,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.7.1";
+    const SCRIPT_VERSION = "0.8.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -988,6 +1116,8 @@ function startGuildMonitor(Core) {
         sort: "name",
         lastMessageAt: null,
         renderQueued: false,
+        trialRevision: 0,
+        trialAnalysisCache: null,
     };
 
     function defaultStore() {
@@ -1042,6 +1172,33 @@ function startGuildMonitor(Core) {
             localStorage.setItem(MARKET_STORAGE_KEY, JSON.stringify({ version: 1, fetchedAt, payload }));
         } catch (error) {
             console.warn("[MWI Guild Monitor] Could not cache market data.", error);
+        }
+    }
+
+    function applyEconomyDefinitions(payload, onlyMissing = false) {
+        const definitions = Core.extractEconomyDefinitions(payload);
+        if (Object.keys(definitions.itemDetails).length && (!onlyMissing || !Object.keys(state.itemDetails).length)) {
+            state.itemDetails = definitions.itemDetails;
+        }
+        if (Object.keys(definitions.guildBuffDetails).length && (!onlyMissing || !Object.keys(state.guildBuffDetails).length)) {
+            state.guildBuffDetails = definitions.guildBuffDetails;
+        }
+        return Object.keys(definitions.itemDetails).length > 0 || Object.keys(definitions.guildBuffDetails).length > 0;
+    }
+
+    function hydrateEconomyDefinitions() {
+        if (Object.keys(state.itemDetails).length && Object.keys(state.guildBuffDetails).length) return;
+        try {
+            const cached = pageWindow.localStorageUtil && pageWindow.localStorageUtil.getInitClientData?.();
+            if (cached) applyEconomyDefinitions(cached, true);
+        } catch (_error) {
+            // The game's cache helper is optional; the WebSocket and local cache paths remain available.
+        }
+        try {
+            const cached = pageWindow.localStorage.getItem("initClientData");
+            if (cached) applyEconomyDefinitions(cached, true);
+        } catch (_error) {
+            // Storage may be disabled or use a different format.
         }
     }
 
@@ -1131,6 +1288,7 @@ function startGuildMonitor(Core) {
         }
         writeStore(store);
         state.guildStore = store.guilds[key];
+        state.trialRevision += 1;
     }
 
     function saveProfile(profile) {
@@ -1180,11 +1338,11 @@ function startGuildMonitor(Core) {
             case "init_client_data":
                 state.skillDetails = message.skillDetailMap || message.skillDetailDict || state.skillDetails;
                 state.guildTrialDetails = message.guildTrialDetailMap || state.guildTrialDetails;
-                state.itemDetails = message.itemDetailMap || state.itemDetails;
-                state.guildBuffDetails = message.guildBuffDetailMap || state.guildBuffDetails;
+                applyEconomyDefinitions(message);
                 void refreshMarketData();
                 break;
             case "init_character_data":
+                applyEconomyDefinitions(message);
                 state.guild = message.guild || null;
                 state.guildCharacterMap = message.guildCharacterMap || {};
                 state.guildSharableCharacterMap = message.guildSharableCharacterMap || {};
@@ -1256,6 +1414,9 @@ function startGuildMonitor(Core) {
             captureTrialParticipation();
         }
 
+        if (message.type !== "market_item_values_updated" && message.type !== "guild_buffs_updated") {
+            state.trialRevision += 1;
+        }
         queueRender();
     }
 
@@ -1396,6 +1557,7 @@ function startGuildMonitor(Core) {
             .mwigm-aura-missing { color: #efbd70; }
             .mwigm-aura-duplicate { color: #ef8f82; }
             .mwigm-economy-table { min-width: 800px; }
+            .mwigm-trial-plan-table { min-width: 980px; }
             .mwigm-shrine-table { min-width: 860px; }
             .mwigm-price-source { color: #8fa0b7; font-size: 10px; text-transform: uppercase; }
             .mwigm-price-best { color: #77d2b2; }
@@ -1428,6 +1590,8 @@ function startGuildMonitor(Core) {
     function createShell() {
         if (document.getElementById(`${SCRIPT_ID}-panel`)) return;
         injectStyles();
+        hydrateEconomyDefinitions();
+        readMarketCache();
 
         const button = document.createElement("button");
         button.id = `${SCRIPT_ID}-button`;
@@ -1476,7 +1640,10 @@ function startGuildMonitor(Core) {
     }
 
     function currentTrialAnalysis(aggregate = currentAggregate()) {
-        return Core.analyzeTrials({
+        const weekStart = Core.resolveGuildWeekStart(state.guild);
+        const cached = state.trialAnalysisCache;
+        if (cached && cached.revision === state.trialRevision && cached.weekStart === weekStart) return cached.result;
+        const result = Core.analyzeTrials({
             aggregate,
             weeklyTrialSet: state.guildWeeklyTrialSet,
             trialDetails: state.guildTrialDetails,
@@ -1486,6 +1653,8 @@ function startGuildMonitor(Core) {
             skillDetails: state.skillDetails,
             auraAssignments: state.guildStore ? state.guildStore.auraAssignments : {},
         });
+        state.trialAnalysisCache = { revision: state.trialRevision, weekStart, result };
+        return result;
     }
 
     function currentMemberTracking(aggregate = currentAggregate()) {
@@ -1555,7 +1724,7 @@ function startGuildMonitor(Core) {
         if (state.activeTab === "shrines") {
             return `
                 <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
-                <button class="mwigm-command mwigm-command-primary" type="button" data-action="refresh-market" ${state.marketLoading ? "disabled" : ""}>${state.marketLoading ? "Refreshing" : "Refresh prices"}</button>
+                <button class="mwigm-command mwigm-command-primary" type="button" data-action="refresh-market" title="Refresh official prices and reread game economy definitions" ${state.marketLoading ? "disabled" : ""}>${state.marketLoading ? "Refreshing" : "Refresh prices"}</button>
             `;
         }
         const sortOptions = state.activeTab === "skills"
@@ -1704,7 +1873,7 @@ function startGuildMonitor(Core) {
 
     function renderMemberTrialChoice(choice, rank, className) {
         const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
-        const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}`;
+        const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}. Individual fit; the optimized roster may differ.`;
         return `<span class="mwigm-chip ${className}" title="${escapeHtml(title)}">${rank} ${escapeHtml(choice.trialName)}</span>`;
     }
 
@@ -1758,18 +1927,23 @@ function startGuildMonitor(Core) {
             `;
         }).join("");
         const distributionRows = analysis.optimalDistribution.filter((trial) =>
-            trial.trialName.toLocaleLowerCase().includes(query) || trial.assignments.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)),
+            trial.trialName.toLocaleLowerCase().includes(query) ||
+            trial.assignments.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)) ||
+            trial.actualSignups.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)),
         ).map((trial) => {
-            const members = trial.assignments.map((entry) => `${entry.memberName} (Lv ${entry.recommendedLevel})`).join(", ") || "No eligible members";
-            const signedElsewhere = trial.signedElsewhere.map((entry) => `${entry.memberName} (${entry.currentTrialName})`).join(", ") || "--";
-            const unsigned = trial.unsigned.map((entry) => entry.memberName).join(", ") || "--";
+            const actualNames = trial.actualSignups.map((entry) => entry.memberName).join(", ") || "No signups";
+            const targetNames = trial.assignments.map((entry) => `${entry.memberName} (Lv ${entry.recommendedLevel})`).join(", ") || "No eligible members";
+            const targetIds = new Set(trial.assignments.map((entry) => String(entry.memberId)));
+            const incoming = trial.signedElsewhere.length + trial.unsigned.length;
+            const outgoing = trial.actualSignups.filter((entry) => !targetIds.has(String(entry.memberId))).length;
             return `
                 <tr>
                     <td><span class="mwigm-trial-name">${escapeHtml(trial.trialName)}</span></td>
-                    <td>${trial.assignments.length}</td>
-                    <td title="${escapeHtml(members)}">${escapeHtml(members)}</td>
-                    <td class="${trial.signedElsewhere.length ? "mwigm-aura-duplicate" : "mwigm-muted"}">${escapeHtml(signedElsewhere)}</td>
-                    <td class="${trial.unsigned.length ? "mwigm-missing" : "mwigm-muted"}">${escapeHtml(unsigned)}</td>
+                    <td><strong>${trial.actualSignups.length} signed</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(actualNames)}</span></td>
+                    <td>${Number.isFinite(trial.actualAverageLevel) ? trial.actualAverageLevel.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.actualProfileCount}/${trial.actualSignups.length} profiles</span></td>
+                    <td><strong>${trial.assignments.length} targeted</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(targetNames)}</span></td>
+                    <td>${Number.isFinite(trial.targetAverageLevel) ? trial.targetAverageLevel.toFixed(1) : "--"}</td>
+                    <td class="${incoming || outgoing ? "mwigm-missing" : "mwigm-up"}">${incoming || outgoing ? `${incoming} in · ${outgoing} out` : "Aligned"}</td>
                 </tr>
             `;
         }).join("");
@@ -1781,15 +1955,16 @@ function startGuildMonitor(Core) {
         return `
             ${overview}
             ${unsignedNotice}
-            <div class="mwigm-section-title">Skilling trials <span>Signup-time levels</span></div>
+            <div class="mwigm-section-title">Actual skilling signups <span>Signup-time levels when available</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows || emptyTableRow(5)}</tbody></table>
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
-            <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. It balances them using levels relative to guild medians. This is a planning estimate; profiles may be stale, and gear, buffs, and availability are not modeled.</div>
+            <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. For feasible even rosters, it maximizes the sum of trial average levels above guild medians. Both averages below use captured profile levels, not signup-time snapshots. Signup slot caps, gear, buffs, and availability are not modeled.</div>
+            ${analysis.allocationBalanced ? "" : `<div class="mwigm-notice">Even target rosters are infeasible with the known minimum levels. This is a best-fit fallback, not a global optimum.</div>`}
             ${mismatchNotice}
-            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:18%">Trial</th><th>Target</th><th style="width:34%">Optimal members</th><th>Signed elsewhere</th><th>Not signed</th></tr></thead><tbody>${distributionRows || emptyTableRow(5)}</tbody></table>
+            <table class="mwigm-table mwigm-trial-plan-table"><thead><tr><th style="width:15%">Trial</th><th style="width:25%">Actually signed</th><th>Actual avg</th><th style="width:25%">Optimized target</th><th>Target avg</th><th>Changes</th></tr></thead><tbody>${distributionRows || emptyTableRow(6)}</tbody></table>
             <div class="mwigm-section-title">Member assignments <span>Current signup compared with the optimal distribution</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Optimal</th><th>Status</th></tr></thead><tbody>${recommendationRows || emptyTableRow(4)}</tbody></table>
         `;
@@ -1883,10 +2058,6 @@ function startGuildMonitor(Core) {
     }
 
     function renderShrines() {
-        if (!Object.keys(state.itemDetails).length || !Object.keys(state.guildBuffDetails).length) {
-            return emptyState("Waiting for guild economy data", "Reload Milky Way Idle so item conversions and shrine definitions can be captured.");
-        }
-
         const economy = currentGuildEconomy();
         const query = state.query.toLocaleLowerCase();
         const marketLabel = state.marketLoading ? "Refreshing" : state.marketTimestamp ? formatRelativeTime(state.marketTimestamp) : "Unavailable";
@@ -1898,6 +2069,16 @@ function startGuildMonitor(Core) {
                 ${metric("Shrine levels priced", `${economy.pricedLevelCount}/${economy.levelCount}`)}
             </div>
         `;
+        const missingDefinitions = [
+            !economy.credits.length ? "guild-credit conversion rules" : "",
+            !economy.shrines.length ? "shrine buff costs" : "",
+        ].filter(Boolean);
+        const definitionNotice = missingDefinitions.length
+            ? `<div class="mwigm-notice"><strong>Game economy definitions missing:</strong> ${escapeHtml(missingDefinitions.join(" and "))}. Reload the game after enabling the script, then open Guild Shop. Refresh prices also retries the game's cached definitions, but the market feed alone does not contain conversion or shrine costs.</div>`
+            : "";
+        const checkedNotice = state.marketFetchedAt
+            ? `<div class="mwigm-notice mwigm-notice-info">Official market prices last checked ${escapeHtml(formatRelativeTime(state.marketFetchedAt))}.</div>`
+            : "";
         const errorNotice = state.marketError ? `<div class="mwigm-notice"><strong>Market update failed:</strong> ${escapeHtml(state.marketError)} Cached prices remain in use when available.</div>` : "";
         const sourceNotice = `<div class="mwigm-notice mwigm-notice-info">Conversion rankings use the official market feed. Current asks are preferred; rows marked Fair or Bid are estimates because no ask was available. Rankings do not model order-book depth. Guild-token value uses its most valuable credit conversion, so shrine totals represent opportunity cost rather than a direct token purchase price.</div>`;
         const creditRows = economy.credits.filter((credit) =>
@@ -1939,7 +2120,9 @@ function startGuildMonitor(Core) {
 
         return `
             ${overview}
+            ${definitionNotice}
             ${errorNotice}
+            ${checkedNotice}
             ${sourceNotice}
             <div class="mwigm-section-title">Optimal credit conversions <span>Lowest estimated coins per guild credit</span></div>
             <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows || emptyTableRow(6)}</tbody></table>
@@ -2029,6 +2212,10 @@ function startGuildMonitor(Core) {
             state.activeTab = control.dataset.tab;
             state.query = "";
             state.sort = "name";
+            if (state.activeTab === "shrines") {
+                hydrateEconomyDefinitions();
+                void refreshMarketData();
+            }
             render();
             return;
         }
@@ -2045,6 +2232,7 @@ function startGuildMonitor(Core) {
                 exportCsv();
                 break;
             case "refresh-market":
+                hydrateEconomyDefinitions();
                 void refreshMarketData(true);
                 break;
         }

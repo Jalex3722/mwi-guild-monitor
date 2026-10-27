@@ -2,7 +2,7 @@
 
 MWI Guild Monitor is a private, read-only Tampermonkey userscript for guild leaders and officers in [Milky Way Idle](https://www.milkywayidle.com/). It watches data that the game already sends to the current browser tab and builds a local guild dashboard.
 
-It never sends gameplay commands. Its only additional request is a cached read-only GET to the game's official hourly market-price feed.
+It never sends gameplay commands. Its only additional request is a cached read-only GET to the game's official market-price feed.
 
 ## Features
 
@@ -22,7 +22,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 - Manual desired-aura assignments for guild members
 - Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
 - Aura-player tracking for unsigned and incorrectly grouped designated players
-- Balanced skilling-trial allocation suggestions based on captured member levels
+- Globally optimized, balanced skilling-trial allocations based on captured member levels and guild medians
 - First and second weekly trial choices ranked by each member's level relative to the captured guild median
 - Cheapest market-priced material conversion for every guild credit type
 - Incremental and cumulative coin estimates for every guild shrine level
@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.7.1`.
+The monitor header displays its running version. The current release is `v0.8.0`.
 
 ## Collecting member skill data
 
@@ -73,9 +73,11 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial
-- An optimal target distribution for every skilling trial, including members currently signed elsewhere or not signed up
+- Actual skilling signups alongside an optimized target distribution, including members currently signed elsewhere or not signed up
 
-The optimal skilling distribution is deliberately simple and visible. It filters out trials whose minimum level the member does not meet, ranks options by the member's level relative to the captured guild median, and caps each target roster near an even share of covered members. Members eligible for fewer trials are assigned first, then specialized members. **Different signup** means the member's current skilling trial differs from that balanced target; it does not mean the current choice is necessarily wrong.
+The optimizer assigns each captured member with at least one eligible skill to one skilling trial, respects guild minimum levels, and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and finds the assignment maximizing the sum of per-trial averages of `member level - captured guild median`. When every trial has a target roster, subtracting medians is a constant offset, so this also maximizes the sum of raw trial average levels. If minimum levels make balanced rosters infeasible, the script shows a best-fit fallback and labels it as such. **Different signup** means the member's current skilling trial differs from that target; it does not mean their current choice is necessarily wrong.
+
+The Trials tab displays actual signup rosters and signup-time levels when available, then compares actual and optimized rosters using captured profile levels for both averages. Actual averages show how many signed members have captured profiles. Players without captured profiles cannot be optimized; check **Missing profiles** before using the plan for decisions. Signup slot caps, equipment, buffs, and availability are not modeled.
 
 The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
@@ -99,11 +101,11 @@ Aura assignments are manual planning labels. The script does not inspect equippe
 
 ## Shrine economics
 
-The **Shrines** tab reads guild-credit conversions and shrine level costs from the game's live client definitions. It downloads the official [`marketplace.json`](https://www.milkywayidle.com/game_data/marketplace.json) feed and ranks tradeable materials by estimated coins per guild credit.
+The **Shrines** tab reads guild-credit conversions and shrine level costs from the game's client definitions. It first observes live game messages and also checks the game's read-only cached `initClientData` when those definitions were missed. It downloads the official [`marketplace.json`](https://www.milkywayidle.com/game_data/marketplace.json) feed and ranks tradeable materials by estimated coins per guild credit. The tab always shows market status, even if game definitions are unavailable; these are separate data sources.
 
 Current asks are preferred because they represent the price to acquire a conversion material. If an ask is missing, the table may fall back to the feed's fair value or bid and labels that source. The feed does not provide full order-book depth, so a large purchase may cost more than the estimate. The general Guild Token is valued through its most valuable available guild-credit route. Shrine totals therefore represent opportunity cost, not a guaranteed direct purchase price.
 
-Each shrine level shows both its incremental cost and the cumulative cost through that level. Use **Refresh prices** for an immediate update; otherwise the browser cache is reused for 65 minutes to avoid unnecessary requests.
+Each shrine level shows both its incremental cost and the cumulative cost through that level. Use **Refresh prices** to reread the market feed and retry cached game definitions; otherwise the browser cache is reused for 65 minutes to avoid unnecessary requests. The official feed may not have a newer snapshot on every refresh. If conversion or shrine rules remain missing, reload the game after enabling the userscript and open Guild Shop.
 
 ## Privacy and safety
 
