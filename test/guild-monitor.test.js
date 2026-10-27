@@ -138,6 +138,22 @@ test("tracks current guild-trial signups and signup levels", () => {
     assert.equal(analysis.unsignedTrials[0].name, "Curie");
 });
 
+test("keeps actual signups when no profiles are captured but has no optimized targets", () => {
+    const aggregate = Core.aggregateGuild([
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+    ], {});
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook"] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" } },
+    });
+
+    assert.equal(aggregate.coveredCount, 0);
+    assert.deepEqual(analysis.skilling[0].signups.map((entry) => entry.memberName), ["Ada"]);
+    assert.deepEqual(analysis.recommendations, []);
+    assert.deepEqual(analysis.optimalDistribution[0].assignments, []);
+});
+
 test("tracks high-level members missing a specific skilling trial", () => {
     const highLevelRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook", signedUpCombatTrialHrid: "badger" },

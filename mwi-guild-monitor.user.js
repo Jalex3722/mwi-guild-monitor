@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.8.3
+// @version      0.8.4
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1112,7 +1112,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.8.3";
+    const SCRIPT_VERSION = "0.8.4";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1558,6 +1558,7 @@ function startGuildMonitor(Core) {
             .mwigm-missing { color: #f1bd67; }
             .mwigm-notice { margin: 12px; padding: 10px 12px; border-left: 3px solid #e2a84b; background: #292419; color: #f0e4cf; }
             .mwigm-notice-info { border-left-color: #61b99a; background: #172a29; color: #d5e9e1; }
+            .mwigm-notice .mwigm-command { margin-top: 8px; }
             .mwigm-empty { padding: 44px 22px; text-align: center; color: #a8b5c8; }
             .mwigm-empty strong { display: block; color: #edf2f8; font-size: 15px; margin-bottom: 5px; }
             .mwigm-list { margin: 0; padding: 0; list-style: none; }
@@ -1922,6 +1923,13 @@ function startGuildMonitor(Core) {
             return emptyState("Waiting for weekly trials", "Reload the game or open Guild > Trials so the current trial set is available.");
         }
 
+        const hasTargets = analysis.recommendations.length > 0;
+        const targetNotice = !aggregate.coveredCount
+            ? `<div class="mwigm-notice"><strong>No optimized target yet: 0/${aggregate.memberCount} member profiles captured.</strong> Open Guild &gt; Members, then open members' profiles while Guild Monitor is enabled. Profiles viewed before the script was enabled need to be opened again. The actual signup rosters below are available, but target names and colors require profile skill levels.<br><button class="mwigm-command" type="button" data-tab="missing">View missing profiles</button></div>`
+            : !hasTargets
+            ? `<div class="mwigm-notice"><strong>No eligible profile levels for this week's skilling trials.</strong> ${aggregate.coveredCount}/${aggregate.memberCount} profiles are captured, but none can be assigned with the available skill levels and trial minimums. Check Missing profiles and the trial requirements.</div>`
+            : `<div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. For feasible even rosters, it maximizes the sum of trial average levels above guild medians. Both averages below use captured profile levels, not signup-time snapshots. Signup slot caps, gear, buffs, and availability are not modeled.</div>`;
+
         const query = state.query.toLocaleLowerCase();
         const overview = `
             <div class="mwigm-status">
@@ -1976,7 +1984,7 @@ function startGuildMonitor(Core) {
                 const statusClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-different";
                 const statusTitle = entry.signupStatus === "aligned" ? "Signed for this skilling trial" : entry.signupStatus === "different" ? `Signed for ${entry.currentTrialName}` : entry.signupStatus === "combatOnly" ? "Combat signup only; no skilling signup" : "No skilling or combat signup";
                 return `<span class="mwigm-target-member ${statusClass}" title="${escapeHtml(statusTitle)}">${escapeHtml(entry.memberName)}</span> <span class="mwigm-subtext">(Lv ${entry.recommendedLevel})</span>`;
-            }).join(", ") || "No eligible members";
+            }).join(", ") || (aggregate.coveredCount ? "No eligible members" : "Profiles needed");
             const targetIds = new Set(trial.assignments.map((entry) => String(entry.memberId)));
             const incoming = trial.signedElsewhere.length + trial.unsigned.length;
             const outgoing = trial.actualSignups.filter((entry) => !targetIds.has(String(entry.memberId))).length;
@@ -1987,7 +1995,7 @@ function startGuildMonitor(Core) {
                     <td>${Number.isFinite(trial.actualAverageLevel) ? trial.actualAverageLevel.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.actualProfileCount}/${trial.actualSignups.length} profiles</span></td>
                     <td><strong>${trial.assignments.length} targeted</strong><span class="mwigm-roster-names">${targetNames}</span></td>
                     <td>${Number.isFinite(trial.targetAverageLevel) ? trial.targetAverageLevel.toFixed(1) : "--"}</td>
-                    <td class="${incoming || outgoing ? "mwigm-missing" : "mwigm-up"}">${incoming || outgoing ? `${incoming} in · ${outgoing} out` : "Aligned"}</td>
+                    <td class="${!hasTargets ? "mwigm-muted" : incoming || outgoing ? "mwigm-missing" : "mwigm-up"}">${!hasTargets ? "--" : incoming || outgoing ? `${incoming} in · ${outgoing} out` : "Aligned"}</td>
                 </tr>
             `;
         }).join("");
@@ -2005,8 +2013,8 @@ function startGuildMonitor(Core) {
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
-            <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. For feasible even rosters, it maximizes the sum of trial average levels above guild medians. Both averages below use captured profile levels, not signup-time snapshots. Signup slot caps, gear, buffs, and availability are not modeled.</div>
-            <div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-member mwigm-target-aligned">Green: signed here</span><span class="mwigm-target-member mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-member mwigm-target-unsigned">Red: no trial signup</span></div>
+            ${targetNotice}
+            ${hasTargets ? `<div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-member mwigm-target-aligned">Green: signed here</span><span class="mwigm-target-member mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-member mwigm-target-unsigned">Red: no trial signup</span></div>` : ""}
             ${analysis.allocationBalanced ? "" : `<div class="mwigm-notice">Even target rosters are infeasible with the known minimum levels. This is a best-fit fallback, not a global optimum.</div>`}
             ${mismatchNotice}
             <table class="mwigm-table mwigm-trial-plan-table"><thead><tr><th style="width:15%">Trial</th><th style="width:25%">Actually signed</th><th>Actual avg</th><th style="width:25%">Optimized target</th><th>Target avg</th><th>Changes</th></tr></thead><tbody>${distributionRows || emptyTableRow(6)}</tbody></table>

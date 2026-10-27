@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.8.3`.
+The monitor header displays its running version. The current release is `v0.8.4`.
 
 ## Collecting member skill data
 
@@ -80,6 +80,8 @@ The optimizer assigns each captured member with at least one eligible skill to o
 The Trials tab displays actual signup rosters and signup-time levels when available, then compares actual and optimized rosters using captured profile levels for both averages. Actual averages show how many signed members have captured profiles. Players without captured profiles cannot be optimized; check **Missing profiles** before using the plan for decisions. Signup slot caps, equipment, buffs, and availability are not modeled.
 
 Names in the optimized target roster are green when signed for that skilling trial, yellow when signed for another skilling trial or for combat only, and red when signed for neither trial category. Each name also has a colored dot and a tooltip describing its current signup. The member assignments list uses the same markers, and its status column uses the same colors.
+
+If the Trials tab reports zero captured profiles, the actual signups remain visible but no optimized target or name colors can be calculated. Open member profiles in the game while the script is enabled, then return to Trials. The missing-profiles button in the empty target state lists who still needs to be viewed.
 
 The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
