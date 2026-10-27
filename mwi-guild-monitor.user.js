@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.7.0
+// @version      0.7.1
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -333,10 +333,13 @@
     function getPreviousWeekTrialStatus(history, currentWeekStartAt, memberId) {
         const currentWeekStart = toTimestamp(currentWeekStartAt);
         if (currentWeekStart === null) return "unknown";
-        const previousWeek = asObject(history)[String(currentWeekStart - WEEK_MS)];
+        const previousWeekStart = currentWeekStart - WEEK_MS;
+        const previousWeek = asObject(history)[String(previousWeekStart)];
         const member = previousWeek && asObject(previousWeek.members)[String(memberId)];
         if (!member) return "unknown";
-        return member.signedSkilling || member.signedCombat ? "participated" : "missed";
+        if (member.signedSkilling || member.signedCombat) return "participated";
+        const lastObservedAt = toTimestamp(member.observedAt ?? previousWeek.observedAt);
+        return lastObservedAt !== null && lastObservedAt >= previousWeekStart + 6 * DAY_MS ? "missed" : "unknown";
     }
 
     function buildMemberTracking(aggregate, history = {}, currentWeekStartAt = null, now = Date.now()) {
@@ -756,7 +759,7 @@
                 return { member, options, specialization: options.length > 1 ? options[0].medianDifference - options[1].medianDifference : options.length ? options[0].medianDifference : -1 };
             })
             .filter((candidate) => candidate.options.length)
-            .sort((left, right) => right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
+            .sort((left, right) => left.options.length - right.options.length || right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
 
         const minPerTrial = Math.floor(candidates.length / trials.length);
         const maxPerTrial = Math.ceil(candidates.length / trials.length);
@@ -876,7 +879,7 @@
             .sort((left, right) => right.capturedAt - left.capturedAt)[0] || null;
     }
 
-    function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}, memberTracking = []) {
+    function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}, memberTracking = [], guildWeekStartAt = null) {
         const skillHrids = aggregate.skills.map((skill) => skill.skillHrid);
         const trackingById = new Map((Array.isArray(memberTracking) ? memberTracking : []).map((entry) => [String(entry.memberId), entry]));
         const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Aura", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
@@ -884,6 +887,9 @@
             const profile = member.profile;
             const tracking = trackingById.get(String(member.id));
             const skillMap = new Map((profile ? profile.skills : []).map((skill) => [skill.skillHrid, skill.level]));
+            const currentSignup = isCurrentSignup(member, guildWeekStartAt);
+            const previousWeekLabel = tracking && tracking.previousWeekStatus === "participated" ? "Signed"
+                : tracking && tracking.previousWeekStatus === "missed" ? "No signup" : "Unknown";
             return [
                 member.name,
                 prettifyHrid(member.role),
@@ -892,10 +898,10 @@
                 (getAuraDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
                 tracking && tracking.offlineDurationMs !== null ? (tracking.offlineDurationMs / DAY_MS).toFixed(1) : "",
                 tracking && tracking.offlineThreeDays ? "Yes" : "No",
-                tracking ? prettifyHrid(tracking.previousWeekStatus) : "Unknown",
-                member.signedUpSkillingTrialHrid ? getTrialName(member.signedUpSkillingTrialHrid, trialDetails, skillDetails) : "",
-                member.signedUpCombatTrialHrid ? getTrialName(member.signedUpCombatTrialHrid, trialDetails, skillDetails) : "",
-                member.signedUpCombatRoleHrid ? prettifyHrid(member.signedUpCombatRoleHrid) : "",
+                previousWeekLabel,
+                currentSignup && member.signedUpSkillingTrialHrid ? getTrialName(member.signedUpSkillingTrialHrid, trialDetails, skillDetails) : "",
+                currentSignup && member.signedUpCombatTrialHrid ? getTrialName(member.signedUpCombatTrialHrid, trialDetails, skillDetails) : "",
+                currentSignup && member.signedUpCombatRoleHrid ? prettifyHrid(member.signedUpCombatRoleHrid) : "",
                 profile ? new Date(profile.capturedAt).toISOString() : "",
                 ...skillHrids.map((hrid) => (skillMap.has(hrid) ? skillMap.get(hrid) : "")),
             ];
@@ -928,6 +934,7 @@
         getItemName,
         getMarketQuote,
         getOfflineDurationMs,
+        isCurrentSignup,
         getSkillName,
         getTrialName,
         makeSnapshot,
@@ -951,7 +958,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.7.0";
+    const SCRIPT_VERSION = "0.7.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1335,13 +1342,15 @@ function startGuildMonitor(Core) {
             .mwigm-command-primary { border-color: #4c9b82; background: #17634f; }
             .mwigm-command-primary:hover { background: #1d775f; }
             .mwigm-content { min-height: 0; flex: 1; overflow: auto; }
-            .mwigm-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-            .mwigm-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: #18243a; color: #afbdd0; font-weight: 600; text-align: right; border-bottom: 1px solid #40516f; }
+            .mwigm-table { width: 100%; min-width: 680px; border-collapse: collapse; table-layout: fixed; }
+            .mwigm-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: #1c293b; color: #c4d0df; font-weight: 600; text-align: right; border-bottom: 1px solid #52637c; white-space: normal; }
             .mwigm-table th:first-child { text-align: left; }
-            .mwigm-table td { padding: 8px 10px; border-bottom: 1px solid #24334b; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            .mwigm-table td { padding: 9px 10px; border-bottom: 1px solid #2b3a50; text-align: right; vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
             .mwigm-table td:first-child { text-align: left; }
-            .mwigm-table tbody tr:hover { background: #17243a; }
-            .mwigm-members-table { min-width: 820px; }
+            .mwigm-table td.mwigm-no-results { padding: 20px 12px; color: #9eafc2; text-align: center; }
+            .mwigm-table tbody tr:nth-child(even) { background: #141f2d; }
+            .mwigm-table tbody tr:hover { background: #213044; }
+            .mwigm-members-table { min-width: 900px; }
             .mwigm-skill-gap { color: #efbd70; }
             .mwigm-skill-list { border-top: 1px solid #31415c; }
             .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(58px, .5fr)) minmax(170px, 1.35fr) minmax(62px, .5fr); border-bottom: 1px solid #2b3a53; }
@@ -1359,16 +1368,20 @@ function startGuildMonitor(Core) {
             .mwigm-up { color: #68d5a9; }
             .mwigm-muted { color: #93a2b7; }
             .mwigm-missing { color: #f1bd67; }
-            .mwigm-notice { margin: 12px; padding: 10px 12px; border-left: 3px solid #e2a84b; background: #211d17; color: #e9dfcd; }
+            .mwigm-notice { margin: 12px; padding: 10px 12px; border-left: 3px solid #e2a84b; background: #292419; color: #f0e4cf; }
+            .mwigm-notice-info { border-left-color: #61b99a; background: #172a29; color: #d5e9e1; }
             .mwigm-empty { padding: 44px 22px; text-align: center; color: #a8b5c8; }
             .mwigm-empty strong { display: block; color: #edf2f8; font-size: 15px; margin-bottom: 5px; }
             .mwigm-list { margin: 0; padding: 0; list-style: none; }
             .mwigm-list li { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid #24334b; }
             .mwigm-list li > span:first-child { flex: 1; min-width: 0; }
-            .mwigm-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 13px 12px 7px; border-bottom: 1px solid #31415c; color: #f3f6fb; font-size: 14px; font-weight: 650; }
+            .mwigm-section-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; padding: 15px 12px 8px; border-bottom: 1px solid #40516a; color: #f3f6fb; font-size: 14px; font-weight: 650; }
             .mwigm-section-title span { color: #8fa0b7; font-size: 11px; font-weight: 400; }
             .mwigm-trial-name { font-weight: 650; color: #f4f7fb; }
+            .mwigm-trial-type { color: #9aacc0; font-size: 10px; text-transform: uppercase; font-weight: 650; }
+            .mwigm-roster-names { display: block; margin-top: 3px; line-height: 1.35; }
             .mwigm-chip { display: inline-block; padding: 1px 5px; border: 1px solid #536681; border-radius: 4px; color: #bdc9d9; font-size: 11px; white-space: nowrap; }
+            .mwigm-table .mwigm-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
             .mwigm-chip-good { border-color: #3f9076; color: #77d2b2; }
             .mwigm-chip-warn { border-color: #9d7335; color: #efbd70; }
             .mwigm-chip-alert { border-color: #a34f4f; color: #f19a91; }
@@ -1379,6 +1392,7 @@ function startGuildMonitor(Core) {
             .mwigm-aura-summary strong { display: block; color: #f5f8fc; }
             .mwigm-aura-summary span { color: #8fa0b7; font-size: 10px; }
             .mwigm-aura-select { width: 100%; min-width: 110px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
+            .mwigm-aura-table, .mwigm-aura-coverage { min-width: 760px; }
             .mwigm-aura-missing { color: #efbd70; }
             .mwigm-aura-duplicate { color: #ef8f82; }
             .mwigm-economy-table { min-width: 800px; }
@@ -1399,6 +1413,7 @@ function startGuildMonitor(Core) {
                 .mwigm-skill-gap { grid-column: span 2; text-align: left; }
                 .mwigm-aura-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .mwigm-aura-summary { border-bottom: 1px solid #31415c; }
+                .mwigm-aura-table { min-width: 0; }
                 .mwigm-aura-table th:nth-child(3), .mwigm-aura-table td:nth-child(3) { display: none; }
                 .mwigm-aura-table th:nth-child(4), .mwigm-aura-table td:nth-child(4) { display: none; }
                 .mwigm-aura-table th:nth-child(5), .mwigm-aura-table td:nth-child(5),
@@ -1496,6 +1511,9 @@ function startGuildMonitor(Core) {
         const button = document.getElementById(`${SCRIPT_ID}-button`);
         if (!panel || !button) return;
 
+        const focusedQuery = document.activeElement && document.activeElement.dataset.control === "query"
+            ? { start: document.activeElement.selectionStart, end: document.activeElement.selectionEnd }
+            : null;
         panel.hidden = !state.isOpen;
         const aggregate = currentAggregate();
         button.dataset.alert = String(Boolean(state.guild && aggregate.missingMembers.length));
@@ -1511,6 +1529,11 @@ function startGuildMonitor(Core) {
         const content = panel.querySelector(".mwigm-content");
         toolbar.innerHTML = renderToolbar(aggregate);
         content.innerHTML = renderContent(aggregate);
+        if (focusedQuery) {
+            const query = toolbar.querySelector('[data-control="query"]');
+            query.focus({ preventScroll: true });
+            query.setSelectionRange(focusedQuery.start, focusedQuery.end);
+        }
     }
 
     function renderMetrics(aggregate) {
@@ -1618,13 +1641,14 @@ function startGuildMonitor(Core) {
             `;
         }).join("");
 
-        return `${coverageNotice(aggregate)}<div class="mwigm-skill-list">${rows}</div>`;
+        return `${coverageNotice(aggregate)}${rows ? `<div class="mwigm-skill-list">${rows}</div>` : emptyState("No matching skills", "Try another skill or member name.")}`;
     }
 
     function renderMembers(aggregate) {
         const tracking = currentMemberTracking(aggregate);
         const trackingById = new Map(tracking.map((entry) => [String(entry.memberId), entry]));
         const medianSuggestionById = new Map(currentTrialAnalysis(aggregate).medianSuggestions.map((entry) => [String(entry.memberId), entry]));
+        const weekStart = Core.resolveGuildWeekStart(state.guild);
         let members = aggregate.members.filter((member) => member.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
         members = sortMembers(members, trackingById);
         const offlineCount = tracking.filter((entry) => entry.offlineThreeDays).length;
@@ -1634,7 +1658,7 @@ function startGuildMonitor(Core) {
         const overview = `
             <div class="mwigm-status">
                 ${metric("Offline 3d+", offlineCount)}
-                ${metric("Missed last week", missedCount)}
+                ${metric("No signup last week", missedCount)}
                 ${metric("Prior week known", `${knownPreviousCount}/${aggregate.memberCount}`)}
                 ${metric("Hidden status", hiddenCount)}
             </div>
@@ -1647,8 +1671,9 @@ function startGuildMonitor(Core) {
             const strongest = Core.strongestSkill(member, state.skillDetails);
             const auraHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
             const aura = Core.getAuraDefinition(auraHrid);
-            const skillingTrial = member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
-            const combatTrial = member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
+            const currentSignup = Core.isCurrentSignup(member, weekStart);
+            const skillingTrial = currentSignup && member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
+            const combatTrial = currentSignup && member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const activity = member.isOnline
                 ? "Online"
                 : member.hideOnlineStatus
@@ -1657,7 +1682,7 @@ function startGuildMonitor(Core) {
                 ? `Offline ${formatElapsedDuration(memberTracking.offlineDurationMs)}`
                 : "Offline time unknown";
             const previousWeekStatus = memberTracking ? memberTracking.previousWeekStatus : "unknown";
-            const previousWeekLabel = previousWeekStatus === "missed" ? "Missed" : previousWeekStatus === "participated" ? "Joined" : "Unknown";
+            const previousWeekLabel = previousWeekStatus === "missed" ? "No signup" : previousWeekStatus === "participated" ? "Signed" : "Unknown";
             const previousWeekClass = previousWeekStatus === "missed" ? "mwigm-chip-alert" : previousWeekStatus === "participated" ? "mwigm-chip-good" : "";
             const trialChoices = trialSuggestion
                 ? `${renderMemberTrialChoice(trialSuggestion.first, "1st", "mwigm-chip-good")}${trialSuggestion.second ? renderMemberTrialChoice(trialSuggestion.second, "2nd", "") : ""}`
@@ -1668,13 +1693,13 @@ function startGuildMonitor(Core) {
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
-                    <td title="Combat: ${escapeHtml(combatTrial)}${member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}">${escapeHtml(skillingTrial)}<br><span class="mwigm-subtext">${escapeHtml(combatTrial)}</span></td>
+                    <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span> ${escapeHtml(skillingTrial)}<br><span class="mwigm-trial-type">Combat</span> ${escapeHtml(combatTrial)}</td>
                     <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span></td>
                     <td class="${profile ? "mwigm-muted" : "mwigm-missing"}">${profile ? formatRelativeTime(profile.capturedAt) : "Not viewed"}</td>
                 </tr>
             `;
         }).join("");
-        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th><th>Profile</th></tr></thead><tbody>${rows}</tbody></table>`;
+        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th><th>Profile</th></tr></thead><tbody>${rows || emptyTableRow(7)}</tbody></table>`;
     }
 
     function renderMemberTrialChoice(choice, rank, className) {
@@ -1716,10 +1741,8 @@ function startGuildMonitor(Core) {
         );
         if (state.sort === "gap") {
             recommendations = [...recommendations].sort((left, right) => {
-                if (left.isAligned !== right.isAligned) return left.isAligned ? 1 : -1;
-                const leftGap = (left.recommendedLevel || 0) - (left.currentLevel || 0);
-                const rightGap = (right.recommendedLevel || 0) - (right.currentLevel || 0);
-                return rightGap - leftGap || left.memberName.localeCompare(right.memberName);
+                const rank = (entry) => entry.isAligned ? 2 : entry.currentTrialHrid ? 0 : 1;
+                return rank(left) - rank(right) || left.memberName.localeCompare(right.memberName);
             });
         }
         const recommendationRows = recommendations.map((entry) => {
@@ -1750,25 +1773,25 @@ function startGuildMonitor(Core) {
                 </tr>
             `;
         }).join("");
-        const mismatches = analysis.recommendations.filter((entry) => entry.currentTrialHrid && !entry.isAligned);
+        const mismatches = recommendations.filter((entry) => entry.currentTrialHrid && !entry.isAligned);
         const mismatchNotice = mismatches.length
-            ? `<div class="mwigm-notice"><strong>Signed for a different trial than the optimal distribution:</strong> ${escapeHtml(mismatches.map((entry) => `${entry.memberName} (${entry.currentTrialName} → ${entry.recommendedTrialName})`).join(", "))}</div>`
+            ? `<div class="mwigm-notice"><strong>${mismatches.length} different signup${mismatches.length === 1 ? "" : "s"} in this view.</strong> These members are signed for a skilling trial other than their balanced target. See Member assignments below.</div>`
             : "";
 
         return `
             ${overview}
             ${unsignedNotice}
             <div class="mwigm-section-title">Skilling trials <span>Signup-time levels</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows}</tbody></table>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows || emptyTableRow(5)}</tbody></table>
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows}</tbody></table>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
-            <div class="mwigm-notice">The target distribution balances captured, eligible members across this week's skilling trials, then favors the skill where each member is strongest relative to the guild median. Stale profiles, equipment, buffs, and availability are not modeled.</div>
+            <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. It balances them using levels relative to guild medians. This is a planning estimate; profiles may be stale, and gear, buffs, and availability are not modeled.</div>
             ${mismatchNotice}
-            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:18%">Trial</th><th>Target</th><th style="width:34%">Optimal members</th><th>Signed elsewhere</th><th>Not signed</th></tr></thead><tbody>${distributionRows}</tbody></table>
+            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:18%">Trial</th><th>Target</th><th style="width:34%">Optimal members</th><th>Signed elsewhere</th><th>Not signed</th></tr></thead><tbody>${distributionRows || emptyTableRow(5)}</tbody></table>
             <div class="mwigm-section-title">Member assignments <span>Current signup compared with the optimal distribution</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Optimal</th><th>Status</th></tr></thead><tbody>${recommendationRows}</tbody></table>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Optimal</th><th>Status</th></tr></thead><tbody>${recommendationRows || emptyTableRow(4)}</tbody></table>
         `;
     }
 
@@ -1777,8 +1800,8 @@ function startGuildMonitor(Core) {
         const range = Number.isFinite(trial.minSignupLevel) ? `${trial.minSignupLevel}-${trial.maxSignupLevel}` : "--";
         const roles = Object.entries(trial.roles).map(([role, count]) => `${Core.prettifyHrid(role)} ${count}`).join(", ") || "--";
         return `
-            <tr title="${escapeHtml(memberNames)}">
-                <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span><br><span class="mwigm-subtext">${escapeHtml(trial.trialHrid)}</span></td>
+            <tr>
+                <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(memberNames)}</span></td>
                 <td>${trial.signupCount}</td>
                 <td>${Number.isFinite(trial.averageLevel) ? trial.averageLevel.toFixed(1) : "--"}</td>
                 ${isCombat ? `<td colspan="2">${escapeHtml(roles)}</td>` : `<td>${range}</td><td>${trial.minLevel || "--"}</td>`}
@@ -1822,7 +1845,8 @@ function startGuildMonitor(Core) {
                 return (leftAura ? leftAura.name : "Zzz").localeCompare(rightAura ? rightAura.name : "Zzz") || left.name.localeCompare(right.name);
             });
         } else if (state.sort === "unsigned") {
-            members = [...members].sort((left, right) => Number(Boolean(left.signedUpCombatTrialHrid)) - Number(Boolean(right.signedUpCombatTrialHrid)) || left.name.localeCompare(right.name));
+            const weekStart = Core.resolveGuildWeekStart(state.guild);
+            members = [...members].sort((left, right) => Number(Core.isCurrentSignup(left, weekStart) && Boolean(left.signedUpCombatTrialHrid)) - Number(Core.isCurrentSignup(right, weekStart) && Boolean(right.signedUpCombatTrialHrid)) || left.name.localeCompare(right.name));
         } else {
             members = [...members].sort((left, right) => left.name.localeCompare(right.name));
         }
@@ -1838,7 +1862,7 @@ function startGuildMonitor(Core) {
             const scalingSkill = aura && member.profile ? member.profile.skills.find((skill) => skill.skillHrid === aura.scalingSkillHrid) : null;
             const trial = analysis.combat.find((entry) => entry.signups.some((signup) => signup.memberId === member.id));
             const tracking = analysis.auraTracking.find((entry) => entry.memberId === member.id);
-            const statusClass = !tracking || tracking.status === "unsigned" ? "mwigm-chip-warn" : tracking.status === "duplicate" ? "mwigm-chip-warn" : "mwigm-chip-good";
+            const statusClass = !tracking ? "" : tracking.status === "unsigned" || tracking.status === "duplicate" ? "mwigm-chip-warn" : "mwigm-chip-good";
             const statusText = !aura ? "Unassigned" : !trial ? "Not signed" : tracking && tracking.status === "duplicate" ? "Duplicate" : "Covered";
             return `
                 <tr>
@@ -1853,8 +1877,8 @@ function startGuildMonitor(Core) {
 
         return `
             ${summary}
-            <div class="mwigm-notice">Choose the primary aura each member is expected to bring. Assignments are planning labels stored only in this browser; they do not inspect loadouts or change trial signups.</div>
-            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired aura</th><th>Scaling skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
+            <div class="mwigm-notice mwigm-notice-info">Choose the primary aura each member is expected to bring. Assignments are planning labels stored only in this browser; they do not inspect loadouts or change trial signups.</div>
+            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired aura</th><th>Scaling skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
         `;
     }
 
@@ -1875,7 +1899,7 @@ function startGuildMonitor(Core) {
             </div>
         `;
         const errorNotice = state.marketError ? `<div class="mwigm-notice"><strong>Market update failed:</strong> ${escapeHtml(state.marketError)} Cached prices remain in use when available.</div>` : "";
-        const sourceNotice = `<div class="mwigm-notice">Conversion rankings use the official market feed. Current asks are preferred; rows marked Fair or Bid are estimates because no ask was available. Rankings do not model order-book depth. Guild-token value uses its most valuable credit conversion, so shrine totals represent opportunity cost rather than a direct token purchase price.</div>`;
+        const sourceNotice = `<div class="mwigm-notice mwigm-notice-info">Conversion rankings use the official market feed. Current asks are preferred; rows marked Fair or Bid are estimates because no ask was available. Rankings do not model order-book depth. Guild-token value uses its most valuable credit conversion, so shrine totals represent opportunity cost rather than a direct token purchase price.</div>`;
         const creditRows = economy.credits.filter((credit) =>
             credit.creditName.toLocaleLowerCase().includes(query) || credit.options.some((option) => option.itemName.toLocaleLowerCase().includes(query)),
         ).map((credit) => {
@@ -1918,9 +1942,9 @@ function startGuildMonitor(Core) {
             ${errorNotice}
             ${sourceNotice}
             <div class="mwigm-section-title">Optimal credit conversions <span>Lowest estimated coins per guild credit</span></div>
-            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows}</tbody></table>
+            <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows || emptyTableRow(6)}</tbody></table>
             <div class="mwigm-section-title">Shrine level estimates <span>Incremental and cumulative opportunity cost</span></div>
-            <table class="mwigm-table mwigm-shrine-table"><thead><tr><th style="width:22%">Shrine</th><th>Level</th><th style="width:30%">Currency cost</th><th>Incremental coins</th><th>Cumulative coins</th></tr></thead><tbody>${shrineRows}</tbody></table>
+            <table class="mwigm-table mwigm-shrine-table"><thead><tr><th style="width:22%">Shrine</th><th>Level</th><th style="width:30%">Currency cost</th><th>Incremental coins</th><th>Cumulative coins</th></tr></thead><tbody>${shrineRows || emptyTableRow(5)}</tbody></table>
         `;
     }
 
@@ -1930,19 +1954,24 @@ function startGuildMonitor(Core) {
         }
         const query = state.query.toLocaleLowerCase();
         const members = aggregate.missingMembers.filter((member) => member.name.toLocaleLowerCase().includes(query));
+        if (!members.length) return emptyState("No matching members", "Try another member name.");
         return `
-            <div class="mwigm-notice">Open these members' profiles from the game's Guild panel. The monitor captures the response passively; it never clicks or requests profiles for you.</div>
+            <div class="mwigm-notice mwigm-notice-info">Open these members' profiles from the game's Guild panel. The monitor captures the response passively; it never clicks or requests profiles for you.</div>
             <ul class="mwigm-list">${members.map((member) => `<li><span><strong>${escapeHtml(member.name)}</strong><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))}</span></span><span class="mwigm-missing">Needed</span></li>`).join("")}</ul>
         `;
     }
 
     function coverageNotice(aggregate) {
         if (aggregate.coveredCount === aggregate.memberCount) return "";
-        return `<div class="mwigm-notice">Statistics currently use ${aggregate.coveredCount} of ${aggregate.memberCount} members. Open the Missing profiles tab for the remaining names.</div>`;
+        return `<div class="mwigm-notice mwigm-notice-info">Statistics currently use ${aggregate.coveredCount} of ${aggregate.memberCount} members. Open the Missing profiles tab for the remaining names.</div>`;
     }
 
     function emptyState(title, detail) {
         return `<div class="mwigm-empty"><strong>${escapeHtml(title)}</strong>${escapeHtml(detail)}</div>`;
+    }
+
+    function emptyTableRow(columns) {
+        return `<tr><td class="mwigm-no-results" colspan="${columns}">No matching data</td></tr>`;
     }
 
     function sortSkills(skills) {
@@ -2058,6 +2087,7 @@ function startGuildMonitor(Core) {
             state.guildTrialDetails,
             state.guildStore ? state.guildStore.auraAssignments : {},
             currentMemberTracking(aggregate),
+            Core.resolveGuildWeekStart(state.guild),
         );
         const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);

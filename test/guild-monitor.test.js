@@ -211,6 +211,36 @@ test("balances skilling recommendations while respecting minimum levels", () => 
     assert.deepEqual(cookingDistribution.unsigned.map((entry) => entry.memberName), ["Noether"]);
 });
 
+test("assigns single-trial members before flexible members", () => {
+    const aggregate = Core.aggregateGuild([
+        { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Cooking only", signedUpSkillingTrialHrid: "cook" },
+    ], {
+        1: { id: "1", name: "Flexible", capturedAt: 1, skills: [
+            { skillHrid: "/skills/cooking", level: 150 },
+            { skillHrid: "/skills/mining", level: 110 },
+        ] },
+        2: { id: "2", name: "Cooking only", capturedAt: 1, skills: [
+            { skillHrid: "/skills/cooking", level: 100 },
+            { skillHrid: "/skills/mining", level: 80 },
+        ] },
+    });
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
+        trialDetails: {
+            cook: { skillHrid: "/skills/cooking" },
+            mine: { skillHrid: "/skills/mining" },
+        },
+        trialMinLevels: { cook: 90, mine: 100 },
+    });
+
+    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
+        ["Cooking only"],
+        ["Flexible"],
+    ]);
+});
+
 test("tracks exact-one aura coverage for each combat trial", () => {
     const combatRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpCombatTrialHrid: "badger" },
@@ -281,7 +311,7 @@ test("stores weekly trial participation and reports previous-week misses", () =>
         { id: "2", name: "Fighter", signedUpCombatTrialHrid: "badger", signupWeekStartAt: previousWeek },
         { id: "3", name: "Absent", signupWeekStartAt: previousWeek },
     ], {});
-    const history = Core.recordWeeklyTrialParticipation({}, priorAggregate, previousWeek, previousWeek + Core.DAY_MS);
+    const history = Core.recordWeeklyTrialParticipation({}, priorAggregate, previousWeek, previousWeek + 6 * Core.DAY_MS);
     const currentAggregate = Core.aggregateGuild([
         ...priorAggregate.members,
         { id: "4", name: "Not Observed" },
@@ -295,6 +325,39 @@ test("stores weekly trial participation and reports previous-week misses", () =>
     assert.equal(status["Not Observed"], "unknown");
 });
 
+test("does not call an early unsigned observation a missed trial", () => {
+    const currentWeek = Date.UTC(2026, 9, 23);
+    const previousWeek = currentWeek - 7 * Core.DAY_MS;
+    const aggregate = Core.aggregateGuild([{ id: "1", name: "Unsigned" }], {});
+    const earlyHistory = Core.recordWeeklyTrialParticipation({}, aggregate, previousWeek, previousWeek + Core.DAY_MS);
+    const lateHistory = Core.recordWeeklyTrialParticipation(earlyHistory, aggregate, previousWeek, previousWeek + 6 * Core.DAY_MS);
+
+    assert.equal(Core.getPreviousWeekTrialStatus(earlyHistory, currentWeek, "1"), "unknown");
+    assert.equal(Core.getPreviousWeekTrialStatus(lateHistory, currentWeek, "1"), "missed");
+});
+
+test("hides signups from a prior week in trial analysis and CSV", () => {
+    const weekStart = Date.UTC(2026, 9, 23);
+    const aggregate = Core.aggregateGuild([{
+        id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook",
+        signedUpCombatTrialHrid: "badger", signedUpCombatRoleHrid: "tank",
+        signupWeekStartAt: weekStart - 7 * Core.DAY_MS,
+    }], profiles);
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook"], combatHrids: ["badger"] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" }, badger: { name: "Badger" } },
+        guildWeekStartAt: weekStart,
+    });
+    const csv = Core.toCsv(aggregate, {}, {}, {}, [], weekStart);
+    const row = csv.split("\r\n")[1].split(",");
+
+    assert.equal(Core.isCurrentSignup(aggregate.members[0], weekStart), false);
+    assert.equal(analysis.anyTrialSignedCount, 0);
+    assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Ada"]);
+    assert.deepEqual(row.slice(8, 11), ["", "", ""]);
+});
+
 test("includes offline and prior-week status in CSV exports", () => {
     const aggregate = Core.aggregateGuild([roster[1]], profiles);
     const csv = Core.toCsv(aggregate, {}, {}, {}, [{
@@ -305,7 +368,7 @@ test("includes offline and prior-week status in CSV exports", () => {
     }]);
 
     assert.match(csv, /Offline Days,Offline 3\+ Days,Previous Week Trial/);
-    assert.match(csv, /4\.0,Yes,Missed/);
+    assert.match(csv, /4\.0,Yes,No signup/);
 });
 
 test("ranks guild-credit conversions and prices shrine levels", () => {
@@ -365,6 +428,41 @@ test("ranks guild-credit conversions and prices shrine levels", () => {
     assert.equal(force.levels[0].purchased, true);
     assert.equal(force.levels[1].incrementalCost, 400);
     assert.equal(force.levels[1].cumulativeCost, 1090);
+});
+
+test("uses ask, fair, then bid prices and leaves unknown shrine costs unpriced", () => {
+    const marketData = { marketData: {
+        "/items/ask": { 0: { a: 40, p: 35, b: 30 } },
+        "/items/fair": { 0: { a: -1, p: 25, b: 20 } },
+        "/items/bid": { 0: { a: -1, b: 15 } },
+    } };
+    assert.deepEqual(["ask", "fair", "bid"].map((name) => Core.getMarketQuote(`/items/${name}`, marketData).source), ["ask", "fair", "bid"]);
+
+    const economy = Core.analyzeGuildEconomy({
+        itemDetails: {
+            "/items/ask": { guildCreditConversions: [{ creditItemHrid: "/items/credit", itemCount: 1, creditCount: 1 }] },
+            "/items/credit": { name: "Credit" },
+        },
+        guildBuffDetails: {
+            "/guild_buffs/test": { levelCosts: [null, { creditCosts: [{ itemHrid: "/items/unknown_credit", count: 2 }] }] },
+        },
+        marketData,
+    });
+    assert.equal(economy.credits[0].bestOption.costPerCredit, 40);
+    assert.equal(economy.shrines[0].levels[0].incrementalCost, null);
+    assert.equal(economy.pricedLevelCount, 0);
+});
+
+test("finds nested guild buff levels", () => {
+    const levels = Core.extractGuildBuffLevels({
+        guild: { characterGuildBuffMap: { "/guild_buffs/force": { level: 3 } } },
+    });
+    const economy = Core.analyzeGuildEconomy({
+        guildBuffDetails: { "/guild_buffs/force": { levelCosts: [null, { guildTokenCost: 1 }] } },
+        guildBuffLevels: levels,
+    });
+    assert.equal(economy.shrines[0].currentLevel, 3);
+    assert.equal(economy.shrines[0].levels[0].purchased, true);
 });
 
 test("suggests first and second trial skills relative to guild medians", () => {

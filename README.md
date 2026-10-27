@@ -16,7 +16,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 - Locally cached member profiles and capture age
 - Manual snapshots with average-level change comparison
 - Weekly skilling and combat trial signup counts
-- Previous-week participation tracking, with a miss recorded only when neither trial category was joined
+- Previous-week signup tracking, with an unsigned status recorded only when neither trial category was joined
 - Per-trial signup levels, level ranges, minimum requirements, and member rosters
 - Combat role distribution for each combat trial
 - Manual desired-aura assignments for guild members
@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The release with member-level first/second trial choices and optimal skilling distribution is `v0.7.0`.
+The monitor header displays its running version. The current release is `v0.7.1`.
 
 ## Collecting member skill data
 
@@ -75,13 +75,13 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Combat role counts for each combat trial
 - An optimal target distribution for every skilling trial, including members currently signed elsewhere or not signed up
 
-The optimal skilling distribution is deliberately simple and visible. It filters out trials whose minimum level the member does not meet, ranks options by the member's level relative to the captured guild median, and caps each target roster near an even share of covered members. Specialized members are assigned first. **Different signup** means the member's current skilling trial differs from that balanced target; it does not mean the current choice is necessarily wrong.
+The optimal skilling distribution is deliberately simple and visible. It filters out trials whose minimum level the member does not meet, ranks options by the member's level relative to the captured guild median, and caps each target roster near an even share of covered members. Members eligible for fewer trials are assigned first, then specialized members. **Different signup** means the member's current skilling trial differs from that balanced target; it does not mean the current choice is necessarily wrong.
 
 The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
-The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **Missed** means the member was observed in the roster but joined neither a skilling nor a combat trial. **Joined** means either category was joined. **Unknown** means that week was not observed, so installing the script cannot retroactively determine older participation.
+The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
 
 ## Aura planning
 
