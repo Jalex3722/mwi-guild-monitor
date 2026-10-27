@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.8.2
+// @version      0.8.3
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1112,7 +1112,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.8.2";
+    const SCRIPT_VERSION = "0.8.3";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1586,10 +1586,11 @@ function startGuildMonitor(Core) {
             .mwigm-economy-table { min-width: 800px; }
             .mwigm-trial-plan-table { min-width: 980px; }
             .mwigm-target-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 12px; color: #b9c8da; font-size: 11px; }
-            .mwigm-target-member { font-weight: 650; }
-            .mwigm-target-aligned { color: #77d2b2; }
-            .mwigm-target-different { color: #efbd70; }
-            .mwigm-target-unsigned { color: #f19a91; }
+            #${SCRIPT_ID}-panel .mwigm-target-member { font-weight: 650; }
+            #${SCRIPT_ID}-panel .mwigm-target-member::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: middle; }
+            #${SCRIPT_ID}-panel .mwigm-target-aligned { color: #77d2b2 !important; }
+            #${SCRIPT_ID}-panel .mwigm-target-different { color: #efbd70 !important; }
+            #${SCRIPT_ID}-panel .mwigm-target-unsigned { color: #f19a91 !important; }
             .mwigm-shrine-table { min-width: 860px; }
             .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
             .mwigm-shrine-group > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
@@ -2005,7 +2006,7 @@ function startGuildMonitor(Core) {
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
             <div class="mwigm-notice mwigm-notice-info">The target covers ${analysis.recommendations.length} of ${aggregate.memberCount} members with captured, eligible trial levels. For feasible even rosters, it maximizes the sum of trial average levels above guild medians. Both averages below use captured profile levels, not signup-time snapshots. Signup slot caps, gear, buffs, and availability are not modeled.</div>
-            <div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-aligned">Green: signed here</span><span class="mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-unsigned">Red: no trial signup</span></div>
+            <div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-member mwigm-target-aligned">Green: signed here</span><span class="mwigm-target-member mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-member mwigm-target-unsigned">Red: no trial signup</span></div>
             ${analysis.allocationBalanced ? "" : `<div class="mwigm-notice">Even target rosters are infeasible with the known minimum levels. This is a best-fit fallback, not a global optimum.</div>`}
             ${mismatchNotice}
             <table class="mwigm-table mwigm-trial-plan-table"><thead><tr><th style="width:15%">Trial</th><th style="width:25%">Actually signed</th><th>Actual avg</th><th style="width:25%">Optimized target</th><th>Target avg</th><th>Changes</th></tr></thead><tbody>${distributionRows || emptyTableRow(6)}</tbody></table>
