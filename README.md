@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.8.0`.
+The monitor header displays its running version. The current release is `v0.8.1`.
 
 ## Collecting member skill data
 
@@ -105,7 +105,7 @@ The **Shrines** tab reads guild-credit conversions and shrine level costs from t
 
 Current asks are preferred because they represent the price to acquire a conversion material. If an ask is missing, the table may fall back to the feed's fair value or bid and labels that source. The feed does not provide full order-book depth, so a large purchase may cost more than the estimate. The general Guild Token is valued through its most valuable available guild-credit route. Shrine totals therefore represent opportunity cost, not a guaranteed direct purchase price.
 
-Each shrine level shows both its incremental cost and the cumulative cost through that level. Use **Refresh prices** to reread the market feed and retry cached game definitions; otherwise the browser cache is reused for 65 minutes to avoid unnecessary requests. The official feed may not have a newer snapshot on every refresh. If conversion or shrine rules remain missing, reload the game after enabling the userscript and open Guild Shop.
+Shrine estimates are grouped under collapsible Force, Tempo, Spirit, Rarity, and Scholar headings. Each group contains its combat and skilling buff levels with incremental and cumulative costs. Open groups remain open after prices refresh, and searching expands matching groups. Use **Refresh prices** to reread the market feed and retry cached game definitions; otherwise the browser cache is reused for 65 minutes to avoid unnecessary requests. The official feed may not have a newer snapshot on every refresh. If conversion or shrine rules remain missing, reload the game after enabling the userscript and open Guild Shop.
 
 ## Privacy and safety
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.8.0
+// @version      0.8.1
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -531,6 +531,9 @@
         const shrines = Object.entries(asObject(guildBuffDetails)).map(([fallbackHrid, rawDetail]) => {
             const detail = rawDetail || {};
             const guildBuffHrid = detail.guildBuffHrid || detail.hrid || fallbackHrid;
+            const linkedShrineHrid = [detail.guildShrineHrid, detail.shrineHrid, detail.guildBuildingHrid]
+                .find((hrid) => typeof hrid === "string" && hrid.startsWith("/guild_shrines/"));
+            const shrineTypeHrid = linkedShrineHrid || `/guild_shrines/${String(guildBuffHrid).split("/").pop().replace(/_(combat|skilling)$/, "")}`;
             const currentLevel = getGuildBuffLevel(guildBuffLevels, guildBuffHrid);
             let cumulativeCost = 0;
             let cumulativeKnown = true;
@@ -570,13 +573,33 @@
                 });
             return {
                 guildBuffHrid,
+                shrineTypeHrid,
+                shrineTypeName: `${prettifyHrid(shrineTypeHrid)} Shrine`,
                 name: detail.name || detail.displayName || prettifyHrid(guildBuffHrid),
-                isCombat: Boolean(detail.isCombat),
+                isCombat: Boolean(detail.isCombat) || /_combat$/.test(guildBuffHrid),
                 currentLevel,
                 levels,
             };
         }).filter((shrine) => shrine.levels.length)
             .sort((left, right) => Number(right.isCombat) - Number(left.isCombat) || left.name.localeCompare(right.name));
+        const groupMap = new Map();
+        shrines.forEach((shrine) => {
+            if (!groupMap.has(shrine.shrineTypeHrid)) {
+                groupMap.set(shrine.shrineTypeHrid, {
+                    shrineTypeHrid: shrine.shrineTypeHrid,
+                    name: shrine.shrineTypeName,
+                    buffs: [],
+                });
+            }
+            groupMap.get(shrine.shrineTypeHrid).buffs.push(shrine);
+        });
+        const shrineGroups = [...groupMap.values()]
+            .map((group) => ({
+                ...group,
+                levelCount: group.buffs.reduce((sum, buff) => sum + buff.levels.length, 0),
+                pricedLevelCount: group.buffs.flatMap((buff) => buff.levels).filter((level) => Number.isFinite(level.incrementalCost)).length,
+            }))
+            .sort((left, right) => left.name.localeCompare(right.name));
 
         return {
             credits,
@@ -584,6 +607,7 @@
             guildTokenRoutes: valuedTokenRoutes,
             guildTokenValue,
             shrines,
+            shrineGroups,
             pricedLevelCount: shrines.flatMap((shrine) => shrine.levels).filter((level) => Number.isFinite(level.incrementalCost)).length,
             levelCount: shrines.reduce((sum, shrine) => sum + shrine.levels.length, 0),
         };
@@ -1086,7 +1110,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.8.0";
+    const SCRIPT_VERSION = "0.8.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1118,6 +1142,7 @@ function startGuildMonitor(Core) {
         renderQueued: false,
         trialRevision: 0,
         trialAnalysisCache: null,
+        expandedShrines: new Set(),
     };
 
     function defaultStore() {
@@ -1559,6 +1584,12 @@ function startGuildMonitor(Core) {
             .mwigm-economy-table { min-width: 800px; }
             .mwigm-trial-plan-table { min-width: 980px; }
             .mwigm-shrine-table { min-width: 860px; }
+            .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
+            .mwigm-shrine-group > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
+            .mwigm-shrine-group > summary:hover, .mwigm-shrine-group[open] > summary { background: #213348; }
+            .mwigm-shrine-group > summary:focus-visible { outline: 2px solid #68d5a9; outline-offset: -2px; }
+            .mwigm-shrine-summary-meta { margin-left: 8px; color: #aebdd0; font-size: 11px; font-weight: 400; }
+            .mwigm-shrine-table-scroll { max-width: 100%; overflow-x: auto; }
             .mwigm-price-source { color: #8fa0b7; font-size: 10px; text-transform: uppercase; }
             .mwigm-price-best { color: #77d2b2; }
             .mwigm-purchased { color: #77d2b2; }
@@ -2097,26 +2128,44 @@ function startGuildMonitor(Core) {
                 </tr>
             `;
         }).join("");
-        const shrineRows = economy.shrines.flatMap((shrine) => shrine.levels.map((level) => ({ shrine, level })))
-            .filter(({ shrine, level }) => {
-                const ingredients = [level.guildTokenCost ? "guild token" : "", ...level.creditCosts.map((entry) => entry.itemName)].join(" ").toLocaleLowerCase();
-                return shrine.name.toLocaleLowerCase().includes(query) || ingredients.includes(query);
-            })
-            .map(({ shrine, level }) => {
+        const shrineSections = economy.shrineGroups.map((group) => {
+            const groupMatches = group.name.toLocaleLowerCase().includes(query);
+            const buffs = group.buffs.map((buff) => {
+                const buffMatches = groupMatches || buff.name.toLocaleLowerCase().includes(query) ||
+                    (buff.isCombat ? "combat" : "skilling").includes(query);
+                const levels = buff.levels.filter((level) => {
+                    const ingredients = [level.guildTokenCost ? "guild token" : "", ...level.creditCosts.map((entry) => entry.itemName)].join(" ").toLocaleLowerCase();
+                    return buffMatches || ingredients.includes(query);
+                });
+                return { ...buff, levels };
+            }).filter((buff) => buff.levels.length);
+            if (!buffs.length) return "";
+            const visibleLevels = buffs.flatMap((buff) => buff.levels);
+            const pricedLevels = visibleLevels.filter((level) => Number.isFinite(level.incrementalCost)).length;
+            const buffSummary = group.buffs.map((buff) => `${buff.isCombat ? "Combat" : "Skilling"} Lv ${buff.currentLevel}`).join(" · ");
+            const rows = buffs.flatMap((buff) => buff.levels.map((level) => {
                 const ingredients = [
                     level.guildTokenCost ? `${formatExactNumber(level.guildTokenCost)} Guild Token` : "",
                     ...level.creditCosts.map((entry) => `${formatExactNumber(entry.count)} ${entry.itemName}`),
                 ].filter(Boolean).join(" + ") || "No currency cost";
                 return `
                     <tr>
-                        <td><span class="mwigm-trial-name">${escapeHtml(shrine.name)}</span><br><span class="mwigm-subtext">${shrine.isCombat ? "Combat" : "Skilling"} · current level ${shrine.currentLevel}</span></td>
+                        <td><span class="mwigm-trial-name">${buff.isCombat ? "Combat" : "Skilling"}</span><br><span class="mwigm-subtext">${escapeHtml(buff.name)} · current Lv ${buff.currentLevel}</span></td>
                         <td>Level ${level.level}${level.purchased ? ` <span class="mwigm-chip mwigm-chip-good">Purchased</span>` : ""}</td>
                         <td title="${escapeHtml(ingredients)}">${escapeHtml(ingredients)}</td>
                         <td>${Number.isFinite(level.incrementalCost) ? formatCoins(level.incrementalCost) : "--"}</td>
                         <td>${Number.isFinite(level.cumulativeCost) ? formatCoins(level.cumulativeCost) : "--"}</td>
                     </tr>
                 `;
-            }).join("");
+            })).join("");
+            const open = query || state.expandedShrines.has(group.shrineTypeHrid) ? " open" : "";
+            return `
+                <details class="mwigm-shrine-group"${open}>
+                    <summary data-action="toggle-shrine" data-shrine-group="${escapeHtml(group.shrineTypeHrid)}">${escapeHtml(group.name)}<span class="mwigm-shrine-summary-meta">${escapeHtml(buffSummary)} · ${pricedLevels}/${visibleLevels.length} levels priced</span></summary>
+                    <div class="mwigm-shrine-table-scroll"><table class="mwigm-table mwigm-shrine-table"><thead><tr><th style="width:22%">Buff</th><th>Level</th><th style="width:30%">Currency cost</th><th>Incremental coins</th><th>Cumulative coins</th></tr></thead><tbody>${rows}</tbody></table></div>
+                </details>
+            `;
+        }).join("");
 
         return `
             ${overview}
@@ -2127,7 +2176,9 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Optimal credit conversions <span>Lowest estimated coins per guild credit</span></div>
             <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows || emptyTableRow(6)}</tbody></table>
             <div class="mwigm-section-title">Shrine level estimates <span>Incremental and cumulative opportunity cost</span></div>
-            <table class="mwigm-table mwigm-shrine-table"><thead><tr><th style="width:22%">Shrine</th><th>Level</th><th style="width:30%">Currency cost</th><th>Incremental coins</th><th>Cumulative coins</th></tr></thead><tbody>${shrineRows || emptyTableRow(5)}</tbody></table>
+            ${shrineSections || (economy.shrineGroups.length
+                ? emptyState("No matching shrine levels", "Try another shrine or credit name.")
+                : emptyState("Shrine levels unavailable", "Game shrine definitions have not been captured yet."))}
         `;
     }
 
@@ -2235,6 +2286,12 @@ function startGuildMonitor(Core) {
                 hydrateEconomyDefinitions();
                 void refreshMarketData(true);
                 break;
+            case "toggle-shrine": {
+                const group = control.dataset.shrineGroup;
+                if (control.parentElement.open) state.expandedShrines.delete(group);
+                else state.expandedShrines.add(group);
+                break;
+            }
         }
     }
 

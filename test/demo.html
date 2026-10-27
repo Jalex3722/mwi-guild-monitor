@@ -130,13 +130,18 @@
                     },
                 },
                 guildBuffDetailMap: {
-                    "/guild_buffs/force": {
-                        name: "Force Shrine",
+                    "/guild_buffs/force_combat": {
+                        name: "Force Combat",
                         isCombat: true,
                         levelCosts: [null, { guildTokenCost: 2, creditCosts: [{ itemHrid: "/items/green_guild_credit", count: 30 }] }, { guildTokenCost: 3, creditCosts: [{ itemHrid: "/items/purple_guild_credit", count: 4 }] }],
                     },
-                    "/guild_buffs/scholar": {
-                        name: "Scholar Shrine",
+                    "/guild_buffs/force_skilling": {
+                        name: "Force Skilling",
+                        isCombat: false,
+                        levelCosts: [null, { guildTokenCost: 1, creditCosts: [{ itemHrid: "/items/green_guild_credit", count: 12 }] }],
+                    },
+                    "/guild_buffs/scholar_skilling": {
+                        name: "Scholar Skilling",
                         isCombat: false,
                         levelCosts: [null, { guildTokenCost: 1, creditCosts: [{ itemHrid: "/items/green_guild_credit", count: 20 }] }],
                     },
@@ -155,7 +160,7 @@
                 },
                 character: { id: 1, name: "Ada" },
                 characterSkills: skills(1, 1812, 154, 136),
-                characterGuildBuffLevelMap: { "/guild_buffs/force": 1, "/guild_buffs/scholar": 0 },
+                characterGuildBuffLevelMap: { "/guild_buffs/force_combat": 1, "/guild_buffs/force_skilling": 0, "/guild_buffs/scholar_skilling": 0 },
             });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 2, name: "Babbage" }, characterSkills: skills(2, 1691, 129, 151) } });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 3, name: "Curie" }, characterSkills: skills(3, 1744, 99, 138) } });

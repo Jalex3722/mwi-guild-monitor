@@ -562,6 +562,32 @@ test("finds nested guild buff levels", () => {
     assert.equal(economy.shrines[0].levels[0].purchased, true);
 });
 
+test("groups combat and skilling buffs by shrine family", () => {
+    const economy = Core.analyzeGuildEconomy({
+        guildBuffDetails: {
+            "/guild_buffs/force_combat": { levelCosts: [null, { guildTokenCost: 0 }] },
+            "/guild_buffs/force_skilling": { levelCosts: [null, { guildTokenCost: 0 }] },
+            "/guild_buffs/tempo_skilling": {
+                guildShrineHrid: "/guild_shrines/tempo",
+                levelCosts: [null, { guildTokenCost: 0 }],
+            },
+        },
+        guildBuffLevels: {
+            "/guild_buffs/force_combat": 2,
+            "/guild_buffs/force_skilling": 1,
+        },
+    });
+
+    assert.deepEqual(economy.shrineGroups.map((group) => group.name), ["Force Shrine", "Tempo Shrine"]);
+    assert.deepEqual(economy.shrineGroups[0].buffs.map((buff) => buff.guildBuffHrid), [
+        "/guild_buffs/force_combat",
+        "/guild_buffs/force_skilling",
+    ]);
+    assert.deepEqual(economy.shrineGroups[0].buffs.map((buff) => buff.currentLevel), [2, 1]);
+    assert.equal(economy.shrineGroups[0].levelCount, 2);
+    assert.equal(economy.shrineGroups[0].pricedLevelCount, 2);
+});
+
 test("extracts economy definitions from cached and wrapped client payloads", () => {
     const definitions = Core.extractEconomyDefinitions(JSON.stringify({
         data: {
