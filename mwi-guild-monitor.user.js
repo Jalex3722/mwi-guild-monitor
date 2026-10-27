@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.2.0
+// @version      0.3.0
 // @description  Read-only guild roster and skill statistics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -31,6 +31,13 @@
     "use strict";
 
     const TOTAL_LEVEL_HRID = "/skills/total_level";
+    const AURA_DEFINITIONS = [
+        { hrid: "/abilities/speed_aura", name: "Speed Aura", scalingSkillHrid: "/skills/attack" },
+        { hrid: "/abilities/guardian_aura", name: "Guardian Aura", scalingSkillHrid: "/skills/defense" },
+        { hrid: "/abilities/fierce_aura", name: "Fierce Aura", scalingSkillHrid: "/skills/melee" },
+        { hrid: "/abilities/critical_aura", name: "Critical Aura", scalingSkillHrid: "/skills/ranged" },
+        { hrid: "/abilities/mystic_aura", name: "Mystic Aura", scalingSkillHrid: "/skills/magic" },
+    ];
 
     function asObject(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -270,6 +277,16 @@
         return skill ? skill.level : null;
     }
 
+    function getAuraDefinition(auraHrid) {
+        return AURA_DEFINITIONS.find((aura) => aura.hrid === auraHrid) || null;
+    }
+
+    function getAuraAssignment(auraAssignments, memberId) {
+        const assignment = asObject(auraAssignments)[String(memberId)];
+        if (typeof assignment === "string") return assignment;
+        return assignment && typeof assignment.auraHrid === "string" ? assignment.auraHrid : "";
+    }
+
     function strongestSkill(member, skillDetails = {}) {
         if (!member || !member.profile) return null;
         const skills = member.profile.skills
@@ -287,6 +304,7 @@
         trialMinLevels = {},
         guildWeekStartAt = null,
         skillDetails = {},
+        auraAssignments = {},
         now = Date.now(),
     }) {
         const skillingHrids = Array.isArray(weeklyTrialSet.skillHrids) ? weeklyTrialSet.skillHrids : [];
@@ -296,6 +314,7 @@
             const active = isCurrentSignup(member, guildWeekStartAt, now);
             return {
                 ...member,
+                desiredAuraHrid: getAuraAssignment(auraAssignments, member.id),
                 currentSkillingTrialHrid: active ? member.signedUpSkillingTrialHrid : "",
                 currentCombatTrialHrid: active ? member.signedUpCombatTrialHrid : "",
                 currentCombatRoleHrid: active ? member.signedUpCombatRoleHrid : "",
@@ -324,6 +343,18 @@
                 result[role] = (result[role] || 0) + 1;
                 return result;
             }, {});
+            const auraCoverage = kind === "combat" ? AURA_DEFINITIONS.map((aura) => {
+                const assignedMembers = signups.filter((entry) => {
+                    const member = currentMembers.find((candidate) => candidate.id === entry.memberId);
+                    return member && member.desiredAuraHrid === aura.hrid;
+                });
+                return {
+                    ...aura,
+                    members: assignedMembers,
+                    count: assignedMembers.length,
+                    status: assignedMembers.length === 0 ? "missing" : assignedMembers.length === 1 ? "covered" : "duplicate",
+                };
+            }) : [];
 
             return {
                 trialHrid,
@@ -337,18 +368,41 @@
                 minSignupLevel: knownLevels.length ? Math.min(...knownLevels) : null,
                 maxSignupLevel: knownLevels.length ? Math.max(...knownLevels) : null,
                 roles,
+                auraCoverage,
+                auraCoveredCount: auraCoverage.filter((aura) => aura.status === "covered").length,
+                auraIssueCount: auraCoverage.filter((aura) => aura.status !== "covered").length,
             };
         };
 
         const skilling = skillingHrids.map((hrid) => makeTrial(hrid, "skilling"));
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
         const recommendations = buildSkillingRecommendations(currentMembers, skilling);
+        const auraTracking = currentMembers
+            .filter((member) => member.desiredAuraHrid)
+            .map((member) => {
+                const aura = getAuraDefinition(member.desiredAuraHrid);
+                const trial = combat.find((entry) => entry.trialHrid === member.currentCombatTrialHrid) || null;
+                const coverage = trial && trial.auraCoverage.find((entry) => entry.hrid === member.desiredAuraHrid);
+                return {
+                    memberId: member.id,
+                    memberName: member.name,
+                    auraHrid: member.desiredAuraHrid,
+                    auraName: aura ? aura.name : prettifyHrid(member.desiredAuraHrid),
+                    scalingSkillHrid: aura ? aura.scalingSkillHrid : "",
+                    scalingLevel: aura ? getProfileSkillLevel(member, aura.scalingSkillHrid) : null,
+                    combatTrialHrid: member.currentCombatTrialHrid,
+                    combatTrialName: trial ? trial.name : "Not signed up",
+                    status: !trial ? "unsigned" : coverage && coverage.status === "duplicate" ? "duplicate" : "covered",
+                };
+            })
+            .sort((left, right) => left.auraName.localeCompare(right.auraName) || left.memberName.localeCompare(right.memberName));
 
         return {
             hasTrialData: skilling.length > 0 || combat.length > 0,
             skilling,
             combat,
             recommendations,
+            auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
             combatSignedCount: currentMembers.filter((member) => member.currentCombatTrialHrid).length,
             unsignedSkilling: currentMembers.filter((member) => !member.currentSkillingTrialHrid),
@@ -440,6 +494,10 @@
                 combatSignedCount: trialAnalysis.combatSignedCount,
                 skilling: Object.fromEntries(trialAnalysis.skilling.map((trial) => [trial.trialHrid, trial.signupCount])),
                 combat: Object.fromEntries(trialAnalysis.combat.map((trial) => [trial.trialHrid, trial.signupCount])),
+                combatAuraCoverage: Object.fromEntries(trialAnalysis.combat.map((trial) => [
+                    trial.trialHrid,
+                    Object.fromEntries(trial.auraCoverage.map((aura) => [aura.hrid, aura.count])),
+                ])),
             };
         }
         return snapshot;
@@ -451,9 +509,9 @@
             .sort((left, right) => right.capturedAt - left.capturedAt)[0] || null;
     }
 
-    function toCsv(aggregate, skillDetails = {}, trialDetails = {}) {
+    function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}) {
         const skillHrids = aggregate.skills.map((skill) => skill.skillHrid);
-        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
+        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Aura", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
         const rows = aggregate.members.map((member) => {
             const profile = member.profile;
             const skillMap = new Map((profile ? profile.skills : []).map((skill) => [skill.skillHrid, skill.level]));
@@ -462,6 +520,7 @@
                 prettifyHrid(member.role),
                 member.experience,
                 member.weeklyExperience,
+                (getAuraDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
                 member.signedUpSkillingTrialHrid ? getTrialName(member.signedUpSkillingTrialHrid, trialDetails, skillDetails) : "",
                 member.signedUpCombatTrialHrid ? getTrialName(member.signedUpCombatTrialHrid, trialDetails, skillDetails) : "",
                 member.signedUpCombatRoleHrid ? prettifyHrid(member.signedUpCombatRoleHrid) : "",
@@ -481,12 +540,15 @@
     }
 
     return {
+        AURA_DEFINITIONS,
         TOTAL_LEVEL_HRID,
         aggregateGuild,
         analyzeTrials,
         asObject,
         getPreviousSnapshot,
         getProfileIdentity,
+        getAuraAssignment,
+        getAuraDefinition,
         getSkillName,
         getTrialName,
         makeSnapshot,
@@ -559,9 +621,25 @@ function startGuildMonitor(Core) {
             name: state.guild && state.guild.name ? state.guild.name : previous.name || "Unknown guild",
             profiles: previous.profiles || {},
             snapshots: Array.isArray(previous.snapshots) ? previous.snapshots : [],
+            auraAssignments: previous.auraAssignments || {},
         };
         state.guildStore = store.guilds[key];
         return { store, key };
+    }
+
+    function setAuraAssignment(memberId, auraHrid) {
+        if (!state.guild) return;
+        const { store, key } = ensureGuildStore();
+        if (auraHrid) {
+            store.guilds[key].auraAssignments[String(memberId)] = {
+                auraHrid,
+                updatedAt: Date.now(),
+            };
+        } else {
+            delete store.guilds[key].auraAssignments[String(memberId)];
+        }
+        writeStore(store);
+        state.guildStore = store.guilds[key];
     }
 
     function saveProfile(profile) {
@@ -781,6 +859,14 @@ function startGuildMonitor(Core) {
             .mwigm-chip-good { border-color: #3f9076; color: #77d2b2; }
             .mwigm-chip-warn { border-color: #9d7335; color: #efbd70; }
             .mwigm-member-skills { display: block; color: #aebbd0; font-size: 11px; }
+            .mwigm-aura-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid #31415c; }
+            .mwigm-aura-summary { min-width: 0; padding: 9px 8px; border-right: 1px solid #31415c; text-align: center; }
+            .mwigm-aura-summary:last-child { border-right: 0; }
+            .mwigm-aura-summary strong { display: block; color: #f5f8fc; }
+            .mwigm-aura-summary span { color: #8fa0b7; font-size: 10px; }
+            .mwigm-aura-select { width: 100%; min-width: 110px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
+            .mwigm-aura-missing { color: #efbd70; }
+            .mwigm-aura-duplicate { color: #ef8f82; }
             .mwigm-footer { padding: 8px 12px; color: #8190a6; font-size: 11px; border-top: 1px solid #31415c; }
             @media (max-width: 620px) {
                 #${SCRIPT_ID}-panel { top: 0; right: 0; bottom: 0; width: 100vw; border-radius: 0; }
@@ -790,6 +876,14 @@ function startGuildMonitor(Core) {
                 .mwigm-toolbar { flex-wrap: wrap; }
                 .mwigm-input { flex-basis: 100%; }
                 .mwigm-table th:nth-child(5), .mwigm-table td:nth-child(5) { display: none; }
+                .mwigm-aura-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .mwigm-aura-summary { border-bottom: 1px solid #31415c; }
+                .mwigm-aura-table th:nth-child(3), .mwigm-aura-table td:nth-child(3) { display: none; }
+                .mwigm-aura-table th:nth-child(4), .mwigm-aura-table td:nth-child(4) { display: none; }
+                .mwigm-aura-table th:nth-child(5), .mwigm-aura-table td:nth-child(5),
+                .mwigm-aura-coverage th:nth-child(5), .mwigm-aura-coverage td:nth-child(5) { display: table-cell; }
+                .mwigm-aura-table th:first-child { width: 29% !important; }
+                .mwigm-aura-table th:nth-child(2) { width: 46% !important; }
             }
         `;
         document.head.appendChild(style);
@@ -823,6 +917,7 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="skills">Skills</button>
                 <button class="mwigm-tab" type="button" data-tab="members">Members</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
+                <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="missing">Missing profiles</button>
             </nav>
             <div class="mwigm-toolbar"></div>
@@ -852,6 +947,7 @@ function startGuildMonitor(Core) {
             trialMinLevels: state.guild && state.guild.trialMinLevelsData,
             guildWeekStartAt: state.guild && state.guild.currentWeekStartAt,
             skillDetails: state.skillDetails,
+            auraAssignments: state.guildStore ? state.guildStore.auraAssignments : {},
         });
     }
 
@@ -897,6 +993,8 @@ function startGuildMonitor(Core) {
             ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
             : state.activeTab === "trials"
             ? `<option value="name">Trial or member</option><option value="gap">Needs review first</option>`
+            : state.activeTab === "auras"
+            ? `<option value="name">Member name</option><option value="aura">Aura type</option><option value="unsigned">Unsigned first</option>`
             : `<option value="name">Member name</option><option value="total">Highest total</option><option value="freshness">Oldest profile</option>`;
 
         return `
@@ -916,6 +1014,7 @@ function startGuildMonitor(Core) {
         }
         if (state.activeTab === "members") return renderMembers(aggregate);
         if (state.activeTab === "trials") return renderTrials(aggregate);
+        if (state.activeTab === "auras") return renderAuras(aggregate);
         if (state.activeTab === "missing") return renderMissing(aggregate);
         return renderSkills(aggregate);
     }
@@ -952,12 +1051,14 @@ function startGuildMonitor(Core) {
             const profile = member.profile;
             const total = profile ? profile.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID) : null;
             const strongest = Core.strongestSkill(member, state.skillDetails);
+            const auraHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
+            const aura = Core.getAuraDefinition(auraHrid);
             const skillingTrial = member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const combatTrial = member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const activity = member.isOnline ? "Online" : member.actionType ? Core.prettifyHrid(member.actionType) : member.lastActiveAt ? `Inactive ${formatRelativeTime(member.lastActiveAt)}` : "Offline";
             return `
                 <tr>
-                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}</td>
+                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
@@ -1020,6 +1121,7 @@ function startGuildMonitor(Core) {
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows}</tbody></table>
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Signed</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows}</tbody></table>
+            ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Skilling allocation suggestions <span>Balanced across captured profiles</span></div>
             <div class="mwigm-notice">Suggestions divide captured, eligible members across this week's skilling trials, prioritizing each member's strongest relevant skill. They are planning hints, not predictions; stale profiles, equipment, buffs, and availability are not modeled.</div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Suggested</th><th>Status</th></tr></thead><tbody>${recommendationRows}</tbody></table>
@@ -1037,6 +1139,78 @@ function startGuildMonitor(Core) {
                 <td>${Number.isFinite(trial.averageLevel) ? trial.averageLevel.toFixed(1) : "--"}</td>
                 ${isCombat ? `<td colspan="2">${escapeHtml(roles)}</td>` : `<td>${range}</td><td>${trial.minLevel || "--"}</td>`}
             </tr>
+        `;
+    }
+
+    function renderCombatAuraCoverage(analysis) {
+        const rows = analysis.combat.map((trial) => {
+            const cells = trial.auraCoverage.map((aura) => {
+                const names = aura.members.map((member) => member.memberName).join(", ");
+                const className = aura.status === "covered" ? "mwigm-up" : aura.status === "duplicate" ? "mwigm-aura-duplicate" : "mwigm-aura-missing";
+                const label = aura.status === "missing" ? "Missing" : names;
+                return `<td class="${className}" title="${escapeHtml(aura.name)}: ${escapeHtml(label)}">${escapeHtml(label)}</td>`;
+            }).join("");
+            return `<tr><td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span><br><span class="mwigm-subtext">${trial.auraCoveredCount}/5 exact coverage</span></td>${cells}</tr>`;
+        }).join("");
+        const headers = Core.AURA_DEFINITIONS.map((aura) => `<th>${escapeHtml(aura.name.replace(" Aura", ""))}</th>`).join("");
+        return `
+            <div class="mwigm-section-title">Combat aura coverage <span>Exactly one of each desired aura</span></div>
+            <table class="mwigm-table mwigm-aura-coverage"><thead><tr><th style="width:22%">Trial</th>${headers}</tr></thead><tbody>${rows}</tbody></table>
+        `;
+    }
+
+    function renderAuras(aggregate) {
+        const analysis = currentTrialAnalysis(aggregate);
+        const assignments = state.guildStore ? state.guildStore.auraAssignments : {};
+        const query = state.query.toLocaleLowerCase();
+        const counts = Core.AURA_DEFINITIONS.map((aura) => ({
+            ...aura,
+            count: aggregate.members.filter((member) => Core.getAuraAssignment(assignments, member.id) === aura.hrid).length,
+        }));
+        let members = aggregate.members.filter((member) => {
+            const aura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, member.id));
+            return member.name.toLocaleLowerCase().includes(query) || (aura && aura.name.toLocaleLowerCase().includes(query));
+        });
+        if (state.sort === "aura") {
+            members = [...members].sort((left, right) => {
+                const leftAura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, left.id));
+                const rightAura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, right.id));
+                return (leftAura ? leftAura.name : "Zzz").localeCompare(rightAura ? rightAura.name : "Zzz") || left.name.localeCompare(right.name);
+            });
+        } else if (state.sort === "unsigned") {
+            members = [...members].sort((left, right) => Number(Boolean(left.signedUpCombatTrialHrid)) - Number(Boolean(right.signedUpCombatTrialHrid)) || left.name.localeCompare(right.name));
+        } else {
+            members = [...members].sort((left, right) => left.name.localeCompare(right.name));
+        }
+
+        const summary = `<div class="mwigm-aura-grid">${counts.map((aura) => `<div class="mwigm-aura-summary"><strong>${aura.count}</strong><span>${escapeHtml(aura.name)}</span></div>`).join("")}</div>`;
+        const options = (selected) => [
+            `<option value="">No aura assigned</option>`,
+            ...Core.AURA_DEFINITIONS.map((aura) => `<option value="${escapeHtml(aura.hrid)}"${aura.hrid === selected ? " selected" : ""}>${escapeHtml(aura.name)}</option>`),
+        ].join("");
+        const rows = members.map((member) => {
+            const auraHrid = Core.getAuraAssignment(assignments, member.id);
+            const aura = Core.getAuraDefinition(auraHrid);
+            const scalingSkill = aura && member.profile ? member.profile.skills.find((skill) => skill.skillHrid === aura.scalingSkillHrid) : null;
+            const trial = analysis.combat.find((entry) => entry.signups.some((signup) => signup.memberId === member.id));
+            const tracking = analysis.auraTracking.find((entry) => entry.memberId === member.id);
+            const statusClass = !tracking || tracking.status === "unsigned" ? "mwigm-chip-warn" : tracking.status === "duplicate" ? "mwigm-chip-warn" : "mwigm-chip-good";
+            const statusText = !aura ? "Unassigned" : !trial ? "Not signed" : tracking && tracking.status === "duplicate" ? "Duplicate" : "Covered";
+            return `
+                <tr>
+                    <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${trial ? escapeHtml(trial.name) : "Not signed"}</span></td>
+                    <td><select class="mwigm-aura-select" data-aura-member-id="${escapeHtml(member.id)}" aria-label="Desired aura for ${escapeHtml(member.name)}">${options(auraHrid)}</select></td>
+                    <td>${aura ? `${escapeHtml(Core.getSkillName(aura.scalingSkillHrid, state.skillDetails))} ${scalingSkill ? scalingSkill.level : "--"}` : "--"}</td>
+                    <td>${trial ? escapeHtml(trial.name) : "Not signed"}</td>
+                    <td><span class="mwigm-chip ${statusClass}">${statusText}</span></td>
+                </tr>
+            `;
+        }).join("");
+
+        return `
+            ${summary}
+            <div class="mwigm-notice">Choose the primary aura each member is expected to bring. Assignments are planning labels stored only in this browser; they do not inspect loadouts or change trial signups.</div>
+            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired aura</th><th>Scaling skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
         `;
     }
 
@@ -1117,6 +1291,11 @@ function startGuildMonitor(Core) {
     }
 
     function handlePanelInput(event) {
+        if (event.target.dataset.auraMemberId) {
+            setAuraAssignment(event.target.dataset.auraMemberId, event.target.value);
+            render();
+            return;
+        }
         if (event.target.dataset.control === "query") {
             state.query = event.target.value;
             queueRender();
@@ -1142,7 +1321,7 @@ function startGuildMonitor(Core) {
     function exportCsv() {
         const aggregate = currentAggregate();
         if (!aggregate.coveredCount) return;
-        const csv = Core.toCsv(aggregate, state.skillDetails, state.guildTrialDetails);
+        const csv = Core.toCsv(aggregate, state.skillDetails, state.guildTrialDetails, state.guildStore ? state.guildStore.auraAssignments : {});
         const blob = new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const anchor = document.createElement("a");

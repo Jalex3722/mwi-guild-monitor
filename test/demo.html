@@ -58,6 +58,22 @@
         };
 
         window.addEventListener("load", () => {
+            localStorage.setItem("mwi-guild-monitor:v1", JSON.stringify({
+                version: 1,
+                guilds: {
+                    44: {
+                        name: "The Milky Scholars",
+                        profiles: {},
+                        snapshots: [],
+                        auraAssignments: {
+                            1: { auraHrid: "/abilities/speed_aura", updatedAt: Date.now() },
+                            2: { auraHrid: "/abilities/guardian_aura", updatedAt: Date.now() },
+                            3: { auraHrid: "/abilities/speed_aura", updatedAt: Date.now() },
+                            4: { auraHrid: "/abilities/mystic_aura", updatedAt: Date.now() },
+                        },
+                    },
+                },
+            }));
             send({
                 type: "init_client_data",
                 skillDetailMap: {

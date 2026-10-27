@@ -17,8 +17,11 @@ It never sends commands or requests to the game server.
 - Weekly skilling and combat trial signup counts
 - Per-trial signup levels, level ranges, minimum requirements, and member rosters
 - Combat role distribution for each combat trial
+- Manual desired-aura assignments for guild members
+- Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
+- Aura-player tracking for unsigned and incorrectly grouped designated players
 - Balanced skilling-trial allocation suggestions based on captured member levels
-- CSV export for Excel or Google Sheets, including guild XP and trial signups
+- CSV export for Excel or Google Sheets, including guild XP, trial signups, and aura assignments
 - Local-only storage in the current browser
 
 ## Install
@@ -65,10 +68,24 @@ The skilling recommendation is deliberately simple and visible. It filters out t
 
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
+## Aura planning
+
+Open the **Auras** tab to assign one desired aura to each designated guild member. The available choices match the current combat aura set:
+
+- Speed Aura, scaling with Attack
+- Guardian Aura, scaling with Defense
+- Fierce Aura, scaling with Melee
+- Critical Aura, scaling with Ranged
+- Mystic Aura, scaling with Magic
+
+The assignment table shows the member's captured scaling-skill level and current combat-trial signup. The Trials tab then evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial.
+
+Aura assignments are manual planning labels. The script does not inspect equipped trial loadouts, equip abilities, or change signups. Assignments are saved per guild in the same local browser storage as captured profiles.
+
 ## Privacy and safety
 
 - No account tokens, passwords, inventory, chat, or private messages are stored.
-- Only the current guild roster, captured member skill levels, trial summaries, and aggregate snapshots are stored.
+- Only the current guild roster, captured member skill levels, manual aura assignments, trial summaries, and aggregate snapshots are stored.
 - Data stays in `localStorage` for `milkywayidle.com` unless you export a CSV.
 - The script has no network permissions and contains no `fetch`, `XMLHttpRequest`, or WebSocket send calls.
 

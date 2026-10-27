@@ -165,3 +165,46 @@ test("balances skilling recommendations while respecting minimum levels", () => 
     assert.equal(noether.recommendedTrialHrid, "cook");
     assert.equal(noether.currentTrialName, "Not signed up");
 });
+
+test("tracks exact-one aura coverage for each combat trial", () => {
+    const combatRoster = [
+        { id: "1", name: "Ada", role: "leader", signedUpCombatTrialHrid: "badger" },
+        { id: "2", name: "Babbage", role: "officer", signedUpCombatTrialHrid: "badger" },
+        { id: "3", name: "Curie", role: "member", signedUpCombatTrialHrid: "badger" },
+        { id: "4", name: "Noether", role: "member", signedUpCombatTrialHrid: "" },
+    ];
+    const aggregate = Core.aggregateGuild(combatRoster, {});
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: [], combatHrids: ["badger"] },
+        trialDetails: { badger: { kind: "combat", name: "Badger" } },
+        auraAssignments: {
+            1: { auraHrid: "/abilities/speed_aura" },
+            2: { auraHrid: "/abilities/guardian_aura" },
+            3: { auraHrid: "/abilities/speed_aura" },
+            4: { auraHrid: "/abilities/mystic_aura" },
+        },
+    });
+    const badger = analysis.combat[0];
+    const speed = badger.auraCoverage.find((aura) => aura.hrid === "/abilities/speed_aura");
+    const guardian = badger.auraCoverage.find((aura) => aura.hrid === "/abilities/guardian_aura");
+    const mystic = badger.auraCoverage.find((aura) => aura.hrid === "/abilities/mystic_aura");
+    const noether = analysis.auraTracking.find((entry) => entry.memberName === "Noether");
+
+    assert.equal(speed.status, "duplicate");
+    assert.deepEqual(speed.members.map((member) => member.memberName), ["Ada", "Curie"]);
+    assert.equal(guardian.status, "covered");
+    assert.equal(mystic.status, "missing");
+    assert.equal(badger.auraCoveredCount, 1);
+    assert.equal(noether.status, "unsigned");
+});
+
+test("includes desired aura in CSV exports", () => {
+    const aggregate = Core.aggregateGuild([roster[0]], profiles);
+    const csv = Core.toCsv(aggregate, {}, {}, {
+        1: { auraHrid: "/abilities/critical_aura" },
+    });
+
+    assert.match(csv, /Desired Aura/);
+    assert.match(csv, /Critical Aura/);
+});
