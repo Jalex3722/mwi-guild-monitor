@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.0
+// @version      0.9.1
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -781,29 +781,35 @@
 
         const skilling = skillingHrids.map((hrid) => makeTrial(hrid, "skilling"));
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
-        const signedMemberIds = new Set(skilling.flatMap((trial) => trial.signups.map((entry) => String(entry.memberId))));
-        const signedMembers = currentMembers.filter((member) => signedMemberIds.has(String(member.id)));
-        const recommendations = buildSkillingRecommendations(signedMembers, skilling, aggregate.skills);
+        const eligibleMembers = currentMembers.filter((member) => skilling.some((trial) => {
+            const level = getProfileSkillLevel(member, trial.skillHrid);
+            return Number.isFinite(level) && trialAllowsLevel(trial, level);
+        }));
+        const recommendations = buildSkillingRecommendations(eligibleMembers, skilling, aggregate.skills);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
         const memberById = new Map(currentMembers.map((member) => [String(member.id), member]));
-        const assessedMemberIds = new Set(recommendations.map((entry) => String(entry.memberId)));
+        const recommendationById = new Map(recommendations.map((entry) => [String(entry.memberId), entry]));
+        const memberComparisons = currentMembers.map((member) => {
+            const recommendation = recommendationById.get(String(member.id));
+            if (recommendation) return recommendation;
+            const currentTrial = skilling.find((trial) => trial.trialHrid === member.currentSkillingTrialHrid);
+            return {
+                memberId: member.id,
+                memberName: member.name,
+                currentTrialHrid: member.currentSkillingTrialHrid,
+                currentTrialName: currentTrial ? currentTrial.name : "No skilling signup",
+                recommendedTrialHrid: "",
+                recommendedTrialName: "Unknown",
+                recommendedLevel: null,
+                signupStatus: member.profile && member.profile.skills.length ? "ineligible" : "missingProfile",
+                reason: member.profile && member.profile.skills.length ? "No captured level meets a current trial minimum" : "Profile skill levels not captured",
+            };
+        }).sort((left, right) => left.memberName.localeCompare(right.memberName));
         const optimalDistribution = skilling.map((trial) => {
-            const heldAssignments = trial.signups.filter((entry) => !assessedMemberIds.has(String(entry.memberId))).map((entry) => {
-                const member = memberById.get(String(entry.memberId));
-                return {
-                    memberId: entry.memberId,
-                    memberName: entry.memberName,
-                    currentTrialHrid: trial.trialHrid,
-                    recommendedTrialHrid: trial.trialHrid,
-                    recommendedLevel: getProfileSkillLevel(member, trial.skillHrid),
-                    signupStatus: "unassessed",
-                    hasProfile: Boolean(member && member.profile && member.profile.skills.length),
-                };
-            });
-            const assignments = [...recommendations.filter((entry) => entry.recommendedTrialHrid === trial.trialHrid), ...heldAssignments]
+            const assignments = recommendations.filter((entry) => entry.recommendedTrialHrid === trial.trialHrid)
                 .sort((left, right) => left.memberName.localeCompare(right.memberName));
             const actualProfileLevels = trial.signups.map((entry) => getProfileSkillLevel(memberById.get(String(entry.memberId)), trial.skillHrid)).filter(Number.isFinite);
-            const targetProfileLevels = assignments.map((entry) => entry.recommendedLevel).filter(Number.isFinite);
+            const unknownActualCount = trial.signups.filter((entry) => !recommendationById.has(String(entry.memberId))).length;
             return {
                 trialHrid: trial.trialHrid,
                 trialName: trial.name,
@@ -811,11 +817,11 @@
                 actualSignups: trial.signups,
                 actualProfileCount: actualProfileLevels.length,
                 actualAverageLevel: actualProfileLevels.length ? actualProfileLevels.reduce((sum, level) => sum + level, 0) / actualProfileLevels.length : null,
-                targetProfileCount: targetProfileLevels.length,
-                targetAverageLevel: targetProfileLevels.length ? targetProfileLevels.reduce((sum, level) => sum + level, 0) / targetProfileLevels.length : null,
-                unassessedCount: heldAssignments.length,
+                targetProfileCount: assignments.length,
+                targetAverageLevel: assignments.length ? assignments.reduce((sum, entry) => sum + entry.recommendedLevel, 0) / assignments.length : null,
+                unknownActualCount,
                 aligned: assignments.filter((entry) => entry.signupStatus === "aligned"),
-                signedElsewhere: assignments.filter((entry) => entry.signupStatus === "different"),
+                signedElsewhere: assignments.filter((entry) => entry.currentTrialHrid !== trial.trialHrid),
             };
         });
         const highLevelSkillGaps = skilling.map((trial) => ({
@@ -857,6 +863,7 @@
             skilling,
             combat,
             recommendations,
+            memberComparisons,
             medianSuggestions,
             optimalDistribution,
             allocationBalanced: optimalDistribution.length < 2 || Math.max(...optimalDistribution.map((trial) => trial.assignments.length)) - Math.min(...optimalDistribution.map((trial) => trial.assignments.length)) <= 1,
@@ -940,36 +947,19 @@
             .sort((left, right) => left.options.length - right.options.length || right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
 
         if (!candidates.length) return [];
-        const candidateIds = new Set(candidates.map((candidate) => String(candidate.member.id)));
-        const fixedMembers = members.filter((member) => !candidateIds.has(String(member.id)));
-        const fixedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, fixedMembers.filter((member) =>
-            member.currentSkillingTrialHrid === trial.trialHrid).length]));
-        const fixedScores = Object.fromEntries(trials.map((trial) => [trial.trialHrid, fixedMembers
-            .filter((member) => member.currentSkillingTrialHrid === trial.trialHrid)
-            .reduce((sum, member) => {
-                const level = getProfileSkillLevel(member, trial.skillHrid);
-                if (!Number.isFinite(level)) return sum;
-                const guildMedian = medianBySkill.get(trial.skillHrid);
-                return sum + level - (Number.isFinite(guildMedian) ? guildMedian : 0);
-            }, 0)]));
-        const minPerTrial = Math.floor(members.length / trials.length);
-        const maxPerTrial = Math.ceil(members.length / trials.length);
-        const extraSlots = members.length % trials.length;
+        const minPerTrial = Math.floor(candidates.length / trials.length);
+        const maxPerTrial = Math.ceil(candidates.length / trials.length);
+        const extraSlots = candidates.length % trials.length;
         let bestPlan = null;
 
         function considerQuotas(index, extrasLeft, quotas) {
             if (index === trials.length) {
                 if (extrasLeft) return;
-                const candidateQuotas = quotas.map((total, trialIndex) => total - fixedCounts[trials[trialIndex].trialHrid]);
-                if (candidateQuotas.some((count) => count < 0)) return;
-                const plan = solveBalancedTrialAssignment(candidates, trials, candidateQuotas, quotas);
+                const plan = solveBalancedTrialAssignment(candidates, trials, quotas);
                 if (!plan) return;
-                const fixedScore = trials.reduce((sum, trial, trialIndex) => sum +
-                    (quotas[trialIndex] ? fixedScores[trial.trialHrid] / quotas[trialIndex] : 0), 0);
-                const score = plan.score + fixedScore;
-                if (!bestPlan || score > bestPlan.score + 1e-9 ||
-                    (Math.abs(score - bestPlan.score) <= 1e-9 && plan.alignedCount > bestPlan.alignedCount)) {
-                    bestPlan = { ...plan, score };
+                if (!bestPlan || plan.score > bestPlan.score + 1e-9 ||
+                    (Math.abs(plan.score - bestPlan.score) <= 1e-9 && plan.alignedCount > bestPlan.alignedCount)) {
+                    bestPlan = plan;
                 }
                 return;
             }
@@ -982,7 +972,7 @@
         }
 
         considerQuotas(0, extraSlots, []);
-        const recommendedCounts = { ...fixedCounts };
+        const recommendedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, 0]));
         const chosenOptions = bestPlan ? bestPlan.options : candidates.map((candidate) => {
             const option = candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < minPerTrial) ||
                 candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < maxPerTrial) ||
@@ -997,9 +987,11 @@
             const currentTrial = trials.find((trial) => trial.trialHrid === currentHrid) || null;
             const currentLevel = currentTrial ? getProfileSkillLevel(candidate.member, currentTrial.skillHrid) : null;
             const isAligned = currentHrid === option.trial.trialHrid;
-            const signupStatus = isAligned ? "aligned" : "different";
+            const signupStatus = isAligned ? "aligned" : currentHrid ? "different" : candidate.member.currentCombatTrialHrid ? "combatOnly" : "unsigned";
             let reason = bestPlan ? "Globally optimized balanced assignment" : "Eligibility-constrained fallback";
-            if (!isAligned) {
+            if (!currentHrid) {
+                reason = "No skilling signup; eligible for this target";
+            } else if (!isAligned) {
                 reason = `Signed for ${currentTrial ? currentTrial.name : "another trial"}; target is ${option.trial.name}`;
             }
 
@@ -1007,7 +999,7 @@
                 memberId: candidate.member.id,
                 memberName: candidate.member.name,
                 currentTrialHrid: currentHrid,
-                currentTrialName: currentTrial ? currentTrial.name : "Not signed up",
+                currentTrialName: currentTrial ? currentTrial.name : "No skilling signup",
                 currentLevel,
                 recommendedTrialHrid: option.trial.trialHrid,
                 recommendedTrialName: option.trial.name,
@@ -1026,11 +1018,11 @@
         });
     }
 
-    function solveBalancedTrialAssignment(candidates, trials, quotas, totalQuotas = quotas) {
+    function solveBalancedTrialAssignment(candidates, trials, quotas) {
         const slots = trials.flatMap((trial, index) => Array(quotas[index]).fill(trial.trialHrid));
         const size = candidates.length;
         const unavailableCost = 1_000_000;
-        const quotaByTrial = new Map(trials.map((trial, index) => [trial.trialHrid, totalQuotas[index]]));
+        const quotaByTrial = new Map(trials.map((trial, index) => [trial.trialHrid, quotas[index]]));
         const optionMaps = candidates.map((candidate) => new Map(candidate.options.map((option) => [option.trial.trialHrid, option])));
         const costs = optionMaps.map((options) => slots.map((trialHrid) => {
             const option = options.get(trialHrid);
@@ -1252,7 +1244,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.0";
+    const SCRIPT_VERSION = "0.9.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1775,6 +1767,7 @@ function startGuildMonitor(Core) {
             #${SCRIPT_ID}-panel .mwigm-target-member::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: middle; }
             #${SCRIPT_ID}-panel .mwigm-target-aligned { color: #77d2b2 !important; }
             #${SCRIPT_ID}-panel .mwigm-target-different { color: #efbd70 !important; }
+            #${SCRIPT_ID}-panel .mwigm-target-unsigned { color: #f19a91 !important; }
             #${SCRIPT_ID}-panel .mwigm-target-unassessed { color: #aebbd0 !important; }
             .mwigm-shrine-table { min-width: 860px; }
             .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
@@ -2124,16 +2117,12 @@ function startGuildMonitor(Core) {
             return emptyState("Waiting for weekly trials", "Reload the game or open Guild > Trials so the current trial set is available.");
         }
 
-        const signedCount = analysis.optimalDistribution.reduce((sum, trial) => sum + trial.actualSignups.length, 0);
-        const unassessedCount = analysis.optimalDistribution.reduce((sum, trial) => sum + trial.unassessedCount, 0);
         const hasAssessedTargets = analysis.recommendations.length > 0;
-        const targetNotice = !signedCount
-            ? `<div class="mwigm-notice">No current skilling signups to distribute. Combat-only and unsigned members are not added to this target.</div>`
-            : !aggregate.coveredCount
-            ? `<div class="mwigm-notice"><strong>No trial moves calculated: 0/${aggregate.memberCount} member profiles captured.</strong> The target roster mirrors actual skilling signups in gray until their profiles are viewed. Open Guild &gt; Members, then open members' profiles while Guild Monitor is enabled. Profiles viewed before the script was enabled need to be opened again.<br><button class="mwigm-command" type="button" data-tab="missing">View missing profiles</button></div>`
+        const targetNotice = !aggregate.coveredCount
+            ? `<div class="mwigm-notice"><strong>No optimized positions available: 0/${aggregate.memberCount} member profiles captured.</strong> Actual signups cannot reveal each person's levels in the other trial skills. Open Guild &gt; Members, then open member profiles while Guild Monitor is enabled. Members without captured levels are shown as Unknown below.<br><button class="mwigm-command" type="button" data-tab="missing">View missing profiles</button></div>`
             : !hasAssessedTargets
-            ? `<div class="mwigm-notice"><strong>No signed members have eligible captured levels.</strong> All ${signedCount} skilling signups remain in their current trial. Check Missing profiles and the trial requirements.</div>`
-            : `<div class="mwigm-notice mwigm-notice-info">The target includes all ${signedCount} current skilling signups. ${analysis.recommendations.length} have eligible captured levels and can be reassigned; ${unassessedCount} remain in their signed trial without an assessed recommendation. The optimizer aims to balance total roster sizes and maximize known median-relative levels. Averages use captured levels only. Signup slot caps, gear, buffs, and availability are not modeled.</div>`;
+            ? `<div class="mwigm-notice"><strong>No captured member qualifies for a current skilling trial.</strong> ${aggregate.coveredCount}/${aggregate.memberCount} profiles are captured. Check Missing profiles and the trial minimums; no target names are copied from actual signups.</div>`
+            : `<div class="mwigm-notice mwigm-notice-info">Calculated positions for ${analysis.recommendations.length}/${aggregate.memberCount} members with eligible captured levels. The optimizer balances these known members across trials and maximizes their median-relative skill levels. Members without enough level data remain Unknown rather than being placed by guesswork. Slot caps, gear, buffs, and availability are not modeled.</div>`;
 
         const query = state.query.toLocaleLowerCase();
         const overview = `
@@ -2155,26 +2144,26 @@ function startGuildMonitor(Core) {
             .filter((trial) => trial.name.toLocaleLowerCase().includes(query) || trial.signups.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)))
             .map((trial) => renderTrialRow(trial, true))
             .join("");
-        let recommendations = analysis.recommendations.filter((entry) =>
+        let comparisons = analysis.memberComparisons.filter((entry) =>
             entry.memberName.toLocaleLowerCase().includes(query) ||
             entry.currentTrialName.toLocaleLowerCase().includes(query) ||
             entry.recommendedTrialName.toLocaleLowerCase().includes(query),
         );
         if (state.sort === "gap") {
-            recommendations = [...recommendations].sort((left, right) => {
-                const rank = (entry) => entry.isAligned ? 2 : entry.currentTrialHrid ? 0 : 1;
+            comparisons = [...comparisons].sort((left, right) => {
+                const rank = (entry) => entry.signupStatus === "different" ? 0 : ["combatOnly", "unsigned"].includes(entry.signupStatus) ? 1 : entry.signupStatus === "aligned" ? 3 : 2;
                 return rank(left) - rank(right) || left.memberName.localeCompare(right.memberName);
             });
         }
-        const recommendationRows = recommendations.map((entry) => {
-            const status = entry.signupStatus === "aligned" ? "Aligned" : "Different skilling";
-            const statusClass = entry.signupStatus === "aligned" ? "mwigm-chip-good" : "mwigm-chip-warn";
-            const nameClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : "mwigm-target-different";
+        const recommendationRows = comparisons.map((entry) => {
+            const status = entry.signupStatus === "aligned" ? "Matches" : entry.signupStatus === "different" ? "Move trial" : entry.signupStatus === "combatOnly" ? "Add skilling" : entry.signupStatus === "unsigned" ? "No signup" : entry.signupStatus === "ineligible" ? "No eligible skill" : "Profile needed";
+            const statusClass = entry.signupStatus === "aligned" ? "mwigm-chip-good" : ["different", "combatOnly"].includes(entry.signupStatus) ? "mwigm-chip-warn" : entry.signupStatus === "unsigned" ? "mwigm-chip-alert" : "";
+            const nameClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : ["different", "combatOnly"].includes(entry.signupStatus) ? "mwigm-target-different" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-unassessed";
             return `
                 <tr>
                     <td><span class="mwigm-target-member ${nameClass}">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
                     <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? ` <span class="mwigm-subtext">Lv ${entry.currentLevel}</span>` : ""}</td>
-                    <td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel} · ${formatSignedDifference(entry.medianDifference)} vs median</span></td>
+                    <td>${escapeHtml(entry.recommendedTrialName)}${Number.isFinite(entry.recommendedLevel) ? ` <span class="mwigm-subtext">Lv ${entry.recommendedLevel} · ${formatSignedDifference(entry.medianDifference)} vs median</span>` : ""}</td>
                     <td><span class="mwigm-chip ${statusClass}">${status}</span></td>
                 </tr>
             `;
@@ -2186,27 +2175,28 @@ function startGuildMonitor(Core) {
         ).map((trial) => {
             const actualNames = trial.actualSignups.map((entry) => entry.memberName).join(", ") || "No signups";
             const targetNames = trial.assignments.map((entry) => {
-                const statusClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : entry.signupStatus === "different" ? "mwigm-target-different" : "mwigm-target-unassessed";
-                const statusTitle = entry.signupStatus === "aligned" ? "Signed for this skilling trial" : entry.signupStatus === "different" ? `Currently signed for ${entry.currentTrialName}` : entry.hasProfile ? "Kept here: no eligible captured trial level" : "Kept here: profile not captured";
+                const statusClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-different";
+                const statusTitle = entry.signupStatus === "aligned" ? "Already signed for this skilling trial" : entry.signupStatus === "different" ? `Currently signed for ${entry.currentTrialName}` : entry.signupStatus === "combatOnly" ? "Combat signup only; no skilling signup" : "No skilling or combat signup";
                 const level = Number.isFinite(entry.recommendedLevel) ? ` <span class="mwigm-subtext">(Lv ${entry.recommendedLevel})</span>` : "";
                 return `<span class="mwigm-target-member ${statusClass}" title="${escapeHtml(statusTitle)}">${escapeHtml(entry.memberName)}</span>${level}`;
-            }).join(", ") || "No skilling signups targeted";
+            }).join(", ") || "No calculated recommendations";
             const targetIds = new Set(trial.assignments.map((entry) => String(entry.memberId)));
+            const assessedIds = new Set(analysis.recommendations.map((entry) => String(entry.memberId)));
             const incoming = trial.signedElsewhere.length;
-            const outgoing = trial.actualSignups.filter((entry) => !targetIds.has(String(entry.memberId))).length;
-            const changeText = incoming || outgoing ? `${incoming} in · ${outgoing} out` : trial.unassessedCount ? `${trial.unassessedCount} unassessed` : "Aligned";
+            const outgoing = trial.actualSignups.filter((entry) => assessedIds.has(String(entry.memberId)) && !targetIds.has(String(entry.memberId))).length;
+            const changeText = hasAssessedTargets ? `${incoming} in · ${outgoing} out${trial.unknownActualCount ? ` · ${trial.unknownActualCount} unknown` : ""}` : `${trial.unknownActualCount} unknown`;
             return `
                 <tr>
                     <td><span class="mwigm-trial-name">${escapeHtml(trial.trialName)}</span></td>
                     <td><strong>${trial.actualSignups.length} signed</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(actualNames)}</span></td>
                     <td>${Number.isFinite(trial.actualAverageLevel) ? trial.actualAverageLevel.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.actualProfileCount}/${trial.actualSignups.length} profiles</span></td>
-                    <td><strong>${trial.assignments.length} targeted</strong><span class="mwigm-roster-names">${targetNames}</span></td>
+                    <td><strong>${trial.assignments.length} recommended</strong><span class="mwigm-roster-names">${targetNames}</span></td>
                     <td>${Number.isFinite(trial.targetAverageLevel) ? trial.targetAverageLevel.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.targetProfileCount}/${trial.assignments.length} levels</span></td>
-                    <td class="${incoming || outgoing ? "mwigm-missing" : trial.unassessedCount ? "mwigm-muted" : "mwigm-up"}">${changeText}</td>
+                    <td class="${incoming || outgoing ? "mwigm-missing" : trial.unknownActualCount ? "mwigm-muted" : "mwigm-up"}">${changeText}</td>
                 </tr>
             `;
         }).join("");
-        const mismatches = recommendations.filter((entry) => entry.currentTrialHrid && !entry.isAligned);
+        const mismatches = comparisons.filter((entry) => entry.signupStatus === "different");
         const mismatchNotice = mismatches.length
             ? `<div class="mwigm-notice"><strong>${mismatches.length} different signup${mismatches.length === 1 ? "" : "s"} in this view.</strong> These members are signed for a skilling trial other than their balanced target. See Member assignments below.</div>`
             : "";
@@ -2221,12 +2211,12 @@ function startGuildMonitor(Core) {
             ${renderCombatAuraCoverage(analysis)}
             <div class="mwigm-section-title">Optimal skilling distribution <span>Balanced target roster using median-relative skill fit</span></div>
             ${targetNotice}
-            ${signedCount ? `<div class="mwigm-target-legend" aria-label="Optimized roster signup status"><span class="mwigm-target-member mwigm-target-aligned">Green: signed here, assessed</span><span class="mwigm-target-member mwigm-target-different">Yellow: signed for a different skill</span><span class="mwigm-target-member mwigm-target-unassessed">Gray: kept here, unassessed</span></div>` : ""}
-            ${hasAssessedTargets && !analysis.allocationBalanced ? `<div class="mwigm-notice">Target rosters are uneven because held signups or level minimums prevent a balanced assignment. This is a best-fit fallback, not a global optimum.</div>` : ""}
+            <div class="mwigm-target-legend" aria-label="Recommendation status"><span class="mwigm-target-member mwigm-target-aligned">Green: already signed here</span><span class="mwigm-target-member mwigm-target-different">Yellow: different skilling trial or combat only</span><span class="mwigm-target-member mwigm-target-unsigned">Red: no trial signup</span><span class="mwigm-target-member mwigm-target-unassessed">Gray: position unknown</span></div>
+            ${hasAssessedTargets && !analysis.allocationBalanced ? `<div class="mwigm-notice">Level requirements prevent even target rosters. This is a best-fit fallback, not a global optimum.</div>` : ""}
             ${mismatchNotice}
             <table class="mwigm-table mwigm-trial-plan-table"><thead><tr><th style="width:15%">Trial</th><th style="width:25%">Actually signed</th><th>Actual avg</th><th style="width:25%">Optimized target</th><th>Target avg</th><th>Changes</th></tr></thead><tbody>${distributionRows || emptyTableRow(6)}</tbody></table>
-            <div class="mwigm-section-title">Member assignments <span>Current signup compared with the optimal distribution</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Current</th><th>Optimal</th><th>Status</th></tr></thead><tbody>${recommendationRows || `<tr><td class="mwigm-no-results" colspan="4">${hasAssessedTargets ? "No matching members" : "No signed members assessed yet"}</td></tr>`}</tbody></table>
+            <div class="mwigm-section-title">Member-by-member comparison <span>Actual signup versus calculated position</span></div>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Actual skilling</th><th>Recommended</th><th>Status</th></tr></thead><tbody>${recommendationRows || emptyTableRow(4)}</tbody></table>
         `;
     }
 
@@ -2275,7 +2265,7 @@ function startGuildMonitor(Core) {
         const memberRows = plan.assignments.filter((entry) => [entry.memberName, entry.plannedTrialName,
             trialByHrid.get(entry.currentTrialHrid)?.name || "", trialByHrid.get(entry.baseTrialHrid)?.name || ""]
             .some((value) => value.toLocaleLowerCase().includes(query))).map((entry) => {
-            const currentName = trialByHrid.get(entry.currentTrialHrid)?.name || Core.prettifyHrid(entry.currentTrialHrid);
+            const currentName = entry.currentTrialHrid ? trialByHrid.get(entry.currentTrialHrid)?.name || Core.prettifyHrid(entry.currentTrialHrid) : "No skilling signup";
             const baseName = trialByHrid.get(entry.baseTrialHrid)?.name || Core.prettifyHrid(entry.baseTrialHrid);
             const override = typeof overrides[String(entry.memberId)] === "string" ? overrides[String(entry.memberId)] : "";
             const options = analysis.skilling.map((trial) => `<option value="${escapeHtml(trial.trialHrid)}" ${override === trial.trialHrid ? "selected" : ""}>${escapeHtml(trial.name)}</option>`).join("");
@@ -2290,10 +2280,10 @@ function startGuildMonitor(Core) {
         }).join("");
 
         return `
-            <div class="mwigm-notice mwigm-notice-info">This plan stays in this browser and does not change game signups. Trial averages use captured profile levels; unknown levels and loadouts are not estimated. Manual moves below minimum or above slot capacity are flagged, not blocked.</div>
+            <div class="mwigm-notice mwigm-notice-info">This plan includes only members with calculated recommendations and stays in this browser; it does not change game signups. Trial averages use captured profile levels. Manual moves below minimum or above slot capacity are flagged, not blocked.</div>
             <div class="mwigm-section-title">Projected roster <span>${plan.overrideCount} manual choice${plan.overrideCount === 1 ? "" : "s"}</span></div>
             <table class="mwigm-table mwigm-plan-summary"><thead><tr><th>Trial</th><th>Planned / slots</th><th>Remaining</th><th>Known avg</th><th>Below min</th></tr></thead><tbody>${summaryRows || emptyTableRow(5)}</tbody></table>
-            <div class="mwigm-section-title">Member choices <span>Starting from the optimized signed roster</span></div>
+            <div class="mwigm-section-title">Member choices <span>Starting from the calculated positions</span></div>
             <table class="mwigm-table mwigm-plan-summary"><thead><tr><th style="width:22%">Member</th><th>Signed</th><th>Optimized</th><th style="width:23%">What-if trial</th><th>Level check</th></tr></thead><tbody>${memberRows || emptyTableRow(5)}</tbody></table>
         `;
     }

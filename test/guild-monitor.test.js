@@ -138,7 +138,7 @@ test("tracks current guild-trial signups and signup levels", () => {
     assert.equal(analysis.unsignedTrials[0].name, "Curie");
 });
 
-test("keeps actual signups in the target when no profiles are captured", () => {
+test("does not invent optimal positions when no profiles are captured", () => {
     const aggregate = Core.aggregateGuild([
         { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
     ], {});
@@ -151,8 +151,9 @@ test("keeps actual signups in the target when no profiles are captured", () => {
     assert.equal(aggregate.coveredCount, 0);
     assert.deepEqual(analysis.skilling[0].signups.map((entry) => entry.memberName), ["Ada"]);
     assert.deepEqual(analysis.recommendations, []);
-    assert.deepEqual(analysis.optimalDistribution[0].assignments.map((entry) => entry.memberName), ["Ada"]);
-    assert.equal(analysis.optimalDistribution[0].assignments[0].signupStatus, "unassessed");
+    assert.deepEqual(analysis.optimalDistribution[0].assignments, []);
+    assert.equal(analysis.memberComparisons[0].recommendedTrialName, "Unknown");
+    assert.equal(analysis.memberComparisons[0].signupStatus, "missingProfile");
     assert.equal(analysis.optimalDistribution[0].targetAverageLevel, null);
 });
 
@@ -227,8 +228,10 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
     assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
-    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName), ["Ada"]);
-    assert.deepEqual(analysis.optimalDistribution[0].assignments.map((entry) => entry.memberName), ["Ada"]);
+    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage", "Curie", "Noether"]);
+    assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Curie").signupStatus, "combatOnly");
+    assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Noether").signupStatus, "unsigned");
+    assert.equal(analysis.optimalDistribution[0].assignments.length, 4);
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
@@ -258,18 +261,16 @@ test("balances skilling recommendations while respecting minimum levels", () => 
     const cookingDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "cook");
     const miningDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "mine");
 
-    assert.equal(babbage.recommendedTrialHrid, "mine");
-    assert.equal(babbage.isAligned, false);
-    assert.equal(babbage.signupStatus, "different");
-    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), false);
+    assert.equal(analysis.recommendations.length, 4);
+    assert.ok(babbage.recommendedLevel >= 90);
+    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Noether").signupStatus, "combatOnly");
     assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Ada").signupStatus, "aligned");
-    assert.deepEqual(cookingDistribution.assignments.map((entry) => entry.memberName), ["Ada"]);
-    assert.deepEqual(miningDistribution.assignments.map((entry) => entry.memberName), ["Babbage", "Curie"]);
-    assert.deepEqual(miningDistribution.signedElsewhere.map((entry) => entry.memberName), ["Babbage"]);
-    assert.equal(cookingDistribution.unassessedCount, 0);
+    assert.equal(cookingDistribution.assignments.length, 2);
+    assert.equal(miningDistribution.assignments.length, 2);
+    assert.ok(analysis.recommendations.every((entry) => entry.recommendedLevel >= 90));
 });
 
-test("moves assessed signups while keeping unassessed signups in their current trial", () => {
+test("recommends all eligible members and leaves missing profiles unknown", () => {
     const aggregate = Core.aggregateGuild([
         { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
         { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "cook" },
@@ -287,16 +288,12 @@ test("moves assessed signups while keeping unassessed signups in their current t
         trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
     });
 
-    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage"]);
-    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
-        ["Ada", "Curie"],
-        ["Babbage", "Noether"],
-    ]);
-    assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.assignments.length, 0), 4);
-    assert.equal(analysis.optimalDistribution[0].assignments.find((entry) => entry.memberName === "Curie").signupStatus, "unassessed");
-    assert.equal(analysis.optimalDistribution[1].assignments.find((entry) => entry.memberName === "Babbage").signupStatus, "different");
-    assert.equal(analysis.optimalDistribution[0].targetProfileCount, 1);
-    assert.equal(analysis.optimalDistribution[1].targetProfileCount, 1);
+    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage", "Unsigned"]);
+    assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.assignments.length, 0), 3);
+    assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Curie").signupStatus, "missingProfile");
+    assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Noether").signupStatus, "missingProfile");
+    assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Unsigned").signupStatus, "unsigned");
+    assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.unknownActualCount, 0), 2);
     assert.equal(analysis.allocationBalanced, true);
 });
 
@@ -356,6 +353,27 @@ test("assigns single-trial members before flexible members", () => {
         ["Cooking only"],
         ["Flexible"],
     ]);
+    const flexible = analysis.memberComparisons.find((entry) => entry.memberName === "Flexible");
+    assert.equal(flexible.currentTrialHrid, "cook");
+    assert.equal(flexible.recommendedTrialHrid, "mine");
+    assert.equal(flexible.signupStatus, "different");
+
+    const changedSignups = Core.aggregateGuild([
+        { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "mine" },
+        { id: "2", name: "Cooking only", signedUpSkillingTrialHrid: "mine" },
+    ], Object.fromEntries(aggregate.members.map((member) => [member.id, member.profile])));
+    const changedAnalysis = Core.analyzeTrials({
+        aggregate: changedSignups,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
+        trialMinLevels: { cook: 90, mine: 100 },
+    });
+    assert.deepEqual(changedAnalysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
+        ["Cooking only"],
+        ["Flexible"],
+    ]);
+    assert.equal(changedAnalysis.memberComparisons.find((entry) => entry.memberName === "Flexible").signupStatus, "aligned");
+    assert.equal(changedAnalysis.memberComparisons.find((entry) => entry.memberName === "Cooking only").signupStatus, "different");
 });
 
 test("globally maximizes the sum of balanced trial averages above guild medians", () => {
