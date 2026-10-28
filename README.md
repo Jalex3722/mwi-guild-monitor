@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.8.4`.
+The monitor header displays its running version. The current release is `v0.8.5`.
 
 ## Collecting member skill data
 
@@ -73,15 +73,15 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial
-- Actual skilling signups alongside an optimized target distribution, including members currently signed elsewhere or not signed up
+- Actual skilling signups alongside a target distribution of those same signed members
 
-The optimizer assigns each captured member with at least one eligible skill to one skilling trial, respects guild minimum levels, and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and finds the assignment maximizing the sum of per-trial averages of `member level - captured guild median`. When every trial has a target roster, subtracting medians is a constant offset, so this also maximizes the sum of raw trial average levels. If minimum levels make balanced rosters infeasible, the script shows a best-fit fallback and labels it as such. **Different signup** means the member's current skilling trial differs from that target; it does not mean their current choice is necessarily wrong.
+The optimizer starts with the actual skilling signup roster. Signed members with eligible captured levels may be reassigned to a different skilling trial. Signed members without an eligible captured profile remain in their current trial, and members without a skilling signup are not added to the target roster. It respects guild minimum levels and keeps total target roster sizes within one member when possible. It tests every feasible balanced size pattern and maximizes known per-trial averages of `member level - captured guild median`; held members with known levels are included in that score. If held signups or minimum levels make balanced rosters infeasible, the script shows a best-fit fallback and labels it as such. **Different signup** means the member's current skilling trial differs from that target; it does not mean their current choice is necessarily wrong.
 
 The Trials tab displays actual signup rosters and signup-time levels when available, then compares actual and optimized rosters using captured profile levels for both averages. Actual averages show how many signed members have captured profiles. Players without captured profiles cannot be optimized; check **Missing profiles** before using the plan for decisions. Signup slot caps, equipment, buffs, and availability are not modeled.
 
-Names in the optimized target roster are green when signed for that skilling trial, yellow when signed for another skilling trial or for combat only, and red when signed for neither trial category. Each name also has a colored dot and a tooltip describing its current signup. The member assignments list uses the same markers, and its status column uses the same colors.
+Names in the optimized target roster are green when an assessed member is signed for that skilling trial, yellow when an assessed member is signed for a different skilling trial, and gray when the member is held in their current trial without an eligible captured profile. Each name also has a colored dot and a tooltip describing its status. Members with no skilling signup are listed separately in participation and skill-gap views rather than added to this signed-roster target.
 
-If the Trials tab reports zero captured profiles, the actual signups remain visible but no optimized target or name colors can be calculated. Open member profiles in the game while the script is enabled, then return to Trials. The missing-profiles button in the empty target state lists who still needs to be viewed.
+If the Trials tab reports zero captured profiles, the target repeats the actual skilling signup rosters in gray; no trial moves or skill-fit colors can be calculated yet. Open member profiles in the game while the script is enabled, then return to Trials. The missing-profiles button lists who still needs to be viewed.
 
 The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 

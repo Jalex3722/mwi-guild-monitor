@@ -138,7 +138,7 @@ test("tracks current guild-trial signups and signup levels", () => {
     assert.equal(analysis.unsignedTrials[0].name, "Curie");
 });
 
-test("keeps actual signups when no profiles are captured but has no optimized targets", () => {
+test("keeps actual signups in the target when no profiles are captured", () => {
     const aggregate = Core.aggregateGuild([
         { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
     ], {});
@@ -151,7 +151,9 @@ test("keeps actual signups when no profiles are captured but has no optimized ta
     assert.equal(aggregate.coveredCount, 0);
     assert.deepEqual(analysis.skilling[0].signups.map((entry) => entry.memberName), ["Ada"]);
     assert.deepEqual(analysis.recommendations, []);
-    assert.deepEqual(analysis.optimalDistribution[0].assignments, []);
+    assert.deepEqual(analysis.optimalDistribution[0].assignments.map((entry) => entry.memberName), ["Ada"]);
+    assert.equal(analysis.optimalDistribution[0].assignments[0].signupStatus, "unassessed");
+    assert.equal(analysis.optimalDistribution[0].targetAverageLevel, null);
 });
 
 test("tracks high-level members missing a specific skilling trial", () => {
@@ -185,10 +187,8 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
     assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
-    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Curie"), true);
-    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), true);
-    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Curie").signupStatus, "combatOnly");
-    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Noether").signupStatus, "unsigned");
+    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName), ["Ada"]);
+    assert.deepEqual(analysis.optimalDistribution[0].assignments.map((entry) => entry.memberName), ["Ada"]);
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
@@ -215,21 +215,49 @@ test("balances skilling recommendations while respecting minimum levels", () => 
         trialMinLevels: JSON.stringify({ cook: 90, mine: 90 }),
     });
     const babbage = analysis.recommendations.find((entry) => entry.memberName === "Babbage");
-    const noether = analysis.recommendations.find((entry) => entry.memberName === "Noether");
     const cookingDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "cook");
     const miningDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "mine");
 
     assert.equal(babbage.recommendedTrialHrid, "mine");
     assert.equal(babbage.isAligned, false);
     assert.equal(babbage.signupStatus, "different");
-    assert.equal(noether.recommendedTrialHrid, "cook");
-    assert.equal(noether.currentTrialName, "Not signed up");
-    assert.equal(noether.signupStatus, "combatOnly");
+    assert.equal(analysis.recommendations.some((entry) => entry.memberName === "Noether"), false);
     assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Ada").signupStatus, "aligned");
-    assert.deepEqual(cookingDistribution.assignments.map((entry) => entry.memberName), ["Ada", "Noether"]);
+    assert.deepEqual(cookingDistribution.assignments.map((entry) => entry.memberName), ["Ada"]);
     assert.deepEqual(miningDistribution.assignments.map((entry) => entry.memberName), ["Babbage", "Curie"]);
     assert.deepEqual(miningDistribution.signedElsewhere.map((entry) => entry.memberName), ["Babbage"]);
-    assert.deepEqual(cookingDistribution.unsigned.map((entry) => entry.memberName), ["Noether"]);
+    assert.equal(cookingDistribution.unassessedCount, 0);
+});
+
+test("moves assessed signups while keeping unassessed signups in their current trial", () => {
+    const aggregate = Core.aggregateGuild([
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "cook" },
+        { id: "3", name: "Curie", signedUpSkillingTrialHrid: "cook" },
+        { id: "4", name: "Noether", signedUpSkillingTrialHrid: "mine" },
+        { id: "5", name: "Unsigned", signedUpSkillingTrialHrid: "" },
+    ], {
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 140 }, { skillHrid: "/skills/mining", level: 100 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 90 }, { skillHrid: "/skills/mining", level: 150 }] },
+        5: { id: "5", name: "Unsigned", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 180 }, { skillHrid: "/skills/mining", level: 180 }] },
+    });
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
+    });
+
+    assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage"]);
+    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
+        ["Ada", "Curie"],
+        ["Babbage", "Noether"],
+    ]);
+    assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.assignments.length, 0), 4);
+    assert.equal(analysis.optimalDistribution[0].assignments.find((entry) => entry.memberName === "Curie").signupStatus, "unassessed");
+    assert.equal(analysis.optimalDistribution[1].assignments.find((entry) => entry.memberName === "Babbage").signupStatus, "different");
+    assert.equal(analysis.optimalDistribution[0].targetProfileCount, 1);
+    assert.equal(analysis.optimalDistribution[1].targetProfileCount, 1);
+    assert.equal(analysis.allocationBalanced, true);
 });
 
 test("assigns single-trial members before flexible members", () => {
@@ -339,7 +367,7 @@ test("global trial assignment respects level minimums", () => {
         [130, 120, 110],
         [110, 130, 120],
     ];
-    const roster = levels.map((_, index) => ({ id: String(index + 1), name: `Member ${index + 1}` }));
+    const roster = levels.map((_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % 3] }));
     const profiles = Object.fromEntries(roster.map((member, index) => [member.id, {
         id: member.id, name: member.name, capturedAt: 1,
         skills: skillHrids.map((skillHrid, skill) => ({ skillHrid, level: levels[index][skill] })),
