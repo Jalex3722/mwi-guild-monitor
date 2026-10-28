@@ -297,34 +297,6 @@ test("recommends all eligible members and leaves missing profiles unknown", () =
     assert.equal(analysis.allocationBalanced, true);
 });
 
-test("projects manual what-if assignments without altering the optimal roster", () => {
-    const aggregate = Core.aggregateGuild([
-        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
-        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "mine" },
-    ], {
-        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 130 }, { skillHrid: "/skills/mining", level: 80 }] },
-        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 100 }, { skillHrid: "/skills/mining", level: 140 }] },
-    });
-    const analysis = Core.analyzeTrials({
-        aggregate,
-        weeklyTrialSet: { skillHrids: ["cook", "mine"] },
-        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
-        trialMinLevels: { cook: 100, mine: 100 },
-    });
-    const plan = Core.projectTrialPlan(analysis, aggregate, { 1: "mine" });
-
-    assert.equal(plan.overrideCount, 1);
-    assert.deepEqual(plan.trials.map((trial) => trial.members.length), [0, 2]);
-    assert.equal(plan.trials[1].knownAverage, 110);
-    assert.equal(plan.trials[1].countDelta, 1);
-    assert.equal(plan.trials[1].averageDelta, null);
-    assert.equal(plan.trials[1].belowMinimumCount, 1);
-    assert.equal(analysis.optimalDistribution[0].assignments[0].memberName, "Ada");
-    const swapped = Core.projectTrialPlan(analysis, aggregate, { 1: "mine", 2: "cook" });
-    assert.equal(swapped.trials[0].averageDelta, -30);
-    assert.equal(swapped.trials[1].averageDelta, -60);
-});
-
 test("assigns single-trial members before flexible members", () => {
     const aggregate = Core.aggregateGuild([
         { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "cook" },

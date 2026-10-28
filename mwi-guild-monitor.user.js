@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.1
+// @version      0.9.2
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -876,55 +876,6 @@
         };
     }
 
-    function projectTrialPlan(analysis, aggregate, overrides = {}) {
-        const trials = Array.isArray(analysis && analysis.skilling) ? analysis.skilling : [];
-        const trialByHrid = new Map(trials.map((trial) => [trial.trialHrid, trial]));
-        const memberById = new Map((aggregate && aggregate.members || []).map((member) => [String(member.id), member]));
-        const selectedOverrides = asObject(overrides);
-        const assignments = (analysis && analysis.optimalDistribution || []).flatMap((trial) => trial.assignments).map((entry) => {
-            const overrideHrid = selectedOverrides[String(entry.memberId)];
-            const overrideTrial = typeof overrideHrid === "string" ? trialByHrid.get(overrideHrid) : null;
-            const trial = overrideTrial || trialByHrid.get(entry.recommendedTrialHrid);
-            if (!trial) return null;
-            const level = getProfileSkillLevel(memberById.get(String(entry.memberId)), trial.skillHrid);
-            return {
-                memberId: entry.memberId,
-                memberName: entry.memberName,
-                currentTrialHrid: entry.currentTrialHrid,
-                baseTrialHrid: entry.recommendedTrialHrid,
-                plannedTrialHrid: trial.trialHrid,
-                plannedTrialName: trial.name,
-                level,
-                eligible: Number.isFinite(level) ? trialAllowsLevel(trial, level) : null,
-                manual: Boolean(overrideTrial),
-            };
-        }).filter(Boolean).sort((left, right) => left.memberName.localeCompare(right.memberName));
-        return {
-            assignments,
-            overrideCount: assignments.filter((entry) => entry.manual).length,
-            trials: trials.map((trial) => {
-                const members = assignments.filter((entry) => entry.plannedTrialHrid === trial.trialHrid);
-                const levels = members.map((entry) => entry.level).filter(Number.isFinite);
-                const baseline = (analysis.optimalDistribution || []).find((entry) => entry.trialHrid === trial.trialHrid);
-                const knownAverage = levels.length ? levels.reduce((sum, level) => sum + level, 0) / levels.length : null;
-                const baselineKnownCount = baseline ? baseline.targetProfileCount : 0;
-                return {
-                    trialHrid: trial.trialHrid,
-                    trialName: trial.name,
-                    capacity: trial.capacity,
-                    members,
-                    knownCount: levels.length,
-                    knownAverage,
-                    countDelta: members.length - (baseline ? baseline.assignments.length : 0),
-                    averageDelta: baseline && levels.length === baselineKnownCount && Number.isFinite(knownAverage) && Number.isFinite(baseline.targetAverageLevel)
-                        ? knownAverage - baseline.targetAverageLevel : null,
-                    remaining: Number.isFinite(trial.capacity) ? trial.capacity - members.length : null,
-                    belowMinimumCount: members.filter((entry) => entry.eligible === false).length,
-                };
-            }),
-        };
-    }
-
     function buildSkillingRecommendations(members, trials, aggregateSkills = []) {
         if (!trials.length) return [];
         const medianBySkill = new Map(aggregateSkills.map((skill) => [skill.skillHrid, skill.median]));
@@ -1228,7 +1179,6 @@
         normalizeSkills,
         parseJsonObject,
         prettifyHrid,
-        projectTrialPlan,
         recordWeeklyTrialParticipation,
         recordWeeklyTrialResults,
         resolveGuildWeekStart,
@@ -1244,7 +1194,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.1";
+    const SCRIPT_VERSION = "0.9.2";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1459,31 +1409,6 @@ function startGuildMonitor(Core) {
         writeStore(store);
         state.guildStore = store.guilds[key];
         state.trialRevision += 1;
-    }
-
-    function setPlanOverride(memberId, trialHrid) {
-        if (!state.guild) return;
-        const { store, key } = ensureGuildStore();
-        const weekKey = String(Core.resolveGuildWeekStart(state.guild));
-        const previous = Core.asObject(store.guilds[key].trialPlans[weekKey]);
-        const overrides = { ...Core.asObject(previous.overrides) };
-        if (trialHrid && (state.guildWeeklyTrialSet.skillHrids || []).includes(trialHrid)) {
-            overrides[String(memberId)] = trialHrid;
-        } else {
-            delete overrides[String(memberId)];
-        }
-        if (Object.keys(overrides).length) store.guilds[key].trialPlans[weekKey] = { overrides };
-        else delete store.guilds[key].trialPlans[weekKey];
-        writeStore(store);
-        state.guildStore = store.guilds[key];
-    }
-
-    function resetPlanOverrides() {
-        if (!state.guild) return;
-        const { store, key } = ensureGuildStore();
-        delete store.guilds[key].trialPlans[String(Core.resolveGuildWeekStart(state.guild))];
-        writeStore(store);
-        state.guildStore = store.guilds[key];
     }
 
     function saveProfile(profile) {
@@ -1760,8 +1685,6 @@ function startGuildMonitor(Core) {
             .mwigm-slot-track { height: 5px; margin-top: 5px; background: #334158; border-radius: 3px; overflow: hidden; }
             .mwigm-slot-fill { height: 100%; background: #68d5a9; }
             .mwigm-slot-fill[data-near="true"] { background: #efbd70; }
-            .mwigm-plan-select { width: 100%; min-width: 150px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
-            .mwigm-plan-summary { min-width: 720px; }
             .mwigm-target-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding: 8px 12px; color: #b9c8da; font-size: 11px; }
             #${SCRIPT_ID}-panel .mwigm-target-member { font-weight: 650; }
             #${SCRIPT_ID}-panel .mwigm-target-member::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: middle; }
@@ -1835,7 +1758,6 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="members">Members</button>
                 <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
-                <button class="mwigm-tab" type="button" data-tab="planner">Planner</button>
                 <button class="mwigm-tab" type="button" data-tab="results">Results</button>
                 <button class="mwigm-tab" type="button" data-tab="shrines">Shrines</button>
                 <button class="mwigm-tab" type="button" data-tab="missing">Missing profiles</button>
@@ -1941,15 +1863,7 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : ["trials", "planner"].includes(state.activeTab) ? "Find a trial or member" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
-        if (state.activeTab === "planner") {
-            const weekKey = String(Core.resolveGuildWeekStart(state.guild));
-            const overrides = Core.asObject(Core.asObject(state.guildStore && state.guildStore.trialPlans)[weekKey]).overrides;
-            return `
-                <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
-                <button class="mwigm-command" type="button" data-action="reset-plan" ${overrides && Object.keys(overrides).length ? "" : "disabled"}>Reset plan</button>
-            `;
-        }
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
         if (state.activeTab === "results") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">`;
         }
@@ -1986,7 +1900,6 @@ function startGuildMonitor(Core) {
         }
         if (state.activeTab === "members") return renderMembers(aggregate);
         if (state.activeTab === "trials") return renderTrials(aggregate);
-        if (state.activeTab === "planner") return renderPlanner(aggregate);
         if (state.activeTab === "results") return renderResults();
         if (state.activeTab === "auras") return renderAuras(aggregate);
         if (state.activeTab === "shrines") return renderShrines();
@@ -2236,55 +2149,6 @@ function startGuildMonitor(Core) {
                 <td>${Number.isFinite(trial.averageLevel) ? trial.averageLevel.toFixed(1) : "--"}</td>
                 ${isCombat ? `<td colspan="2">${escapeHtml(roles)}</td>` : `<td>${range}</td><td>${trial.minLevel || "--"}</td>`}
             </tr>
-        `;
-    }
-
-    function renderPlanner(aggregate) {
-        const analysis = currentTrialAnalysis(aggregate);
-        if (!analysis.skilling.length) {
-            return emptyState("No skilling trials yet", "Open Guild > Trials or reload the game to load this week's trial set.");
-        }
-        const weekKey = String(Core.resolveGuildWeekStart(state.guild));
-        const savedPlan = Core.asObject(Core.asObject(state.guildStore && state.guildStore.trialPlans)[weekKey]);
-        const overrides = Core.asObject(savedPlan.overrides);
-        const plan = Core.projectTrialPlan(analysis, aggregate, overrides);
-        const trialByHrid = new Map(analysis.skilling.map((trial) => [trial.trialHrid, trial]));
-        const query = state.query.toLocaleLowerCase();
-        const summaryRows = plan.trials.filter((trial) => trial.trialName.toLocaleLowerCase().includes(query) ||
-            trial.members.some((member) => member.memberName.toLocaleLowerCase().includes(query))).map((trial) => {
-            const capacity = Number.isFinite(trial.capacity) ? trial.capacity : null;
-            const remaining = trial.remaining === null ? "--" : trial.remaining < 0 ? `${-trial.remaining} over` : `${trial.remaining} open`;
-            return `<tr>
-                <td><span class="mwigm-trial-name">${escapeHtml(trial.trialName)}</span></td>
-                <td>${trial.members.length}/${capacity === null ? "--" : capacity}<span class="mwigm-subtext mwigm-roster-names">${trial.countDelta ? `${trial.countDelta > 0 ? "+" : ""}${trial.countDelta}` : "0"} vs target</span></td>
-                <td class="${trial.remaining !== null && trial.remaining < 0 ? "mwigm-missing" : "mwigm-muted"}">${remaining}</td>
-                <td>${Number.isFinite(trial.knownAverage) ? trial.knownAverage.toFixed(1) : "--"}<span class="mwigm-subtext mwigm-roster-names">${trial.knownCount}/${trial.members.length} levels · ${formatDelta(trial.averageDelta)} vs target</span></td>
-                <td class="${trial.belowMinimumCount ? "mwigm-missing" : "mwigm-muted"}">${trial.belowMinimumCount}</td>
-            </tr>`;
-        }).join("");
-        const memberRows = plan.assignments.filter((entry) => [entry.memberName, entry.plannedTrialName,
-            trialByHrid.get(entry.currentTrialHrid)?.name || "", trialByHrid.get(entry.baseTrialHrid)?.name || ""]
-            .some((value) => value.toLocaleLowerCase().includes(query))).map((entry) => {
-            const currentName = entry.currentTrialHrid ? trialByHrid.get(entry.currentTrialHrid)?.name || Core.prettifyHrid(entry.currentTrialHrid) : "No skilling signup";
-            const baseName = trialByHrid.get(entry.baseTrialHrid)?.name || Core.prettifyHrid(entry.baseTrialHrid);
-            const override = typeof overrides[String(entry.memberId)] === "string" ? overrides[String(entry.memberId)] : "";
-            const options = analysis.skilling.map((trial) => `<option value="${escapeHtml(trial.trialHrid)}" ${override === trial.trialHrid ? "selected" : ""}>${escapeHtml(trial.name)}</option>`).join("");
-            const levelStatus = entry.eligible === null ? "Level unknown" : entry.eligible ? `Lv ${entry.level}` : `Lv ${entry.level} below minimum`;
-            return `<tr>
-                <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span>${entry.manual ? ` <span class="mwigm-chip mwigm-chip-warn">Manual</span>` : ""}</td>
-                <td>${escapeHtml(currentName)}</td>
-                <td>${escapeHtml(baseName)}</td>
-                <td><select class="mwigm-plan-select" data-plan-member-id="${escapeHtml(entry.memberId)}" aria-label="Plan trial for ${escapeHtml(entry.memberName)}"><option value="" ${override ? "" : "selected"}>Optimized target</option>${options}</select></td>
-                <td class="${entry.eligible === false ? "mwigm-missing" : "mwigm-muted"}">${levelStatus}</td>
-            </tr>`;
-        }).join("");
-
-        return `
-            <div class="mwigm-notice mwigm-notice-info">This plan includes only members with calculated recommendations and stays in this browser; it does not change game signups. Trial averages use captured profile levels. Manual moves below minimum or above slot capacity are flagged, not blocked.</div>
-            <div class="mwigm-section-title">Projected roster <span>${plan.overrideCount} manual choice${plan.overrideCount === 1 ? "" : "s"}</span></div>
-            <table class="mwigm-table mwigm-plan-summary"><thead><tr><th>Trial</th><th>Planned / slots</th><th>Remaining</th><th>Known avg</th><th>Below min</th></tr></thead><tbody>${summaryRows || emptyTableRow(5)}</tbody></table>
-            <div class="mwigm-section-title">Member choices <span>Starting from the calculated positions</span></div>
-            <table class="mwigm-table mwigm-plan-summary"><thead><tr><th style="width:22%">Member</th><th>Signed</th><th>Optimized</th><th style="width:23%">What-if trial</th><th>Level check</th></tr></thead><tbody>${memberRows || emptyTableRow(5)}</tbody></table>
         `;
     }
 
@@ -2589,10 +2453,6 @@ function startGuildMonitor(Core) {
                 hydrateEconomyDefinitions();
                 void refreshMarketData(true);
                 break;
-            case "reset-plan":
-                resetPlanOverrides();
-                render();
-                break;
             case "toggle-shrine": {
                 const group = control.dataset.shrineGroup;
                 if (control.parentElement.open) state.expandedShrines.delete(group);
@@ -2603,11 +2463,6 @@ function startGuildMonitor(Core) {
     }
 
     function handlePanelInput(event) {
-        if (event.type === "change" && event.target.dataset.planMemberId) {
-            setPlanOverride(event.target.dataset.planMemberId, event.target.value);
-            render();
-            return;
-        }
         if (event.target.dataset.auraMemberId) {
             setAuraAssignment(event.target.dataset.auraMemberId, event.target.value);
             render();

@@ -1,6 +1,6 @@
 {
   "name": "mwi-guild-monitor",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "private": true,
   "description": "Read-only Tampermonkey guild analytics for Milky Way Idle",
   "scripts": {
