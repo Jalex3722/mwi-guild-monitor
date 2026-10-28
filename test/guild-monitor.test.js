@@ -156,6 +156,46 @@ test("keeps actual signups in the target when no profiles are captured", () => {
     assert.equal(analysis.optimalDistribution[0].targetAverageLevel, null);
 });
 
+test("calculates trial capacity from encampment levels", () => {
+    const levels = {
+        "/guild_buildings/skilling_encampment": 3,
+        "/guild_buildings/combat_encampment": 2,
+    };
+    const details = {
+        "/guild_buildings/skilling_encampment": { maxLevel: 2, skillingTrialSlotsPerLevel: 4 },
+        "/guild_buildings/combat_encampment": { maxLevel: 5, combatTrialSlotsPerLevel: 3 },
+    };
+    assert.equal(Core.getTrialCapacity("skilling", levels, details), 28);
+    assert.equal(Core.getTrialCapacity("combat", levels, details), 46);
+    assert.equal(Core.getTrialCapacity("skilling", {}, {}), 20);
+    assert.equal(Core.getTrialCapacity("skilling", null, details), null);
+    assert.equal(Core.getTrialCapacity("combat", levels, {}), null);
+});
+
+test("records observed trial results without losing signup history", () => {
+    const week = Date.UTC(2026, 9, 23);
+    const original = { [week]: { weekStartAt: week, members: { 1: { signedSkilling: true } } } };
+    const first = Core.recordWeeklyTrialResults(original, JSON.stringify({
+        skilling: { status: "in_progress", parties: { cook: { highestTier: 2 } } },
+        combat: { status: "scheduled", parties: {} },
+        points: { cook: 120 },
+    }), { skillHrids: ["cook"], combatHrids: ["badger"] }, week, week + 1000);
+    const second = Core.recordWeeklyTrialResults(first, {
+        skilling: { status: "completed", parties: { cook: { highestTier: 3, done: true } } },
+        points: { cook: 180 },
+    }, { skillHrids: ["cook"], combatHrids: ["badger"] }, week, week + 2000);
+
+    assert.equal(second[week].members[1].signedSkilling, true);
+    assert.equal(second[week].results.cook.highestTier, 3);
+    assert.equal(second[week].results.cook.points, 180);
+    assert.equal(second[week].results.cook.done, true);
+    assert.equal(second[week].results.badger.status, "scheduled");
+    const afterSignupObservation = Core.recordWeeklyTrialParticipation(second, Core.aggregateGuild([
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+    ], {}), week, week + 3000);
+    assert.equal(afterSignupObservation[week].results.cook.highestTier, 3);
+});
+
 test("tracks high-level members missing a specific skilling trial", () => {
     const highLevelRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook", signedUpCombatTrialHrid: "badger" },
@@ -258,6 +298,34 @@ test("moves assessed signups while keeping unassessed signups in their current t
     assert.equal(analysis.optimalDistribution[0].targetProfileCount, 1);
     assert.equal(analysis.optimalDistribution[1].targetProfileCount, 1);
     assert.equal(analysis.allocationBalanced, true);
+});
+
+test("projects manual what-if assignments without altering the optimal roster", () => {
+    const aggregate = Core.aggregateGuild([
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "mine" },
+    ], {
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 130 }, { skillHrid: "/skills/mining", level: 80 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 100 }, { skillHrid: "/skills/mining", level: 140 }] },
+    });
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: ["cook", "mine"] },
+        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
+        trialMinLevels: { cook: 100, mine: 100 },
+    });
+    const plan = Core.projectTrialPlan(analysis, aggregate, { 1: "mine" });
+
+    assert.equal(plan.overrideCount, 1);
+    assert.deepEqual(plan.trials.map((trial) => trial.members.length), [0, 2]);
+    assert.equal(plan.trials[1].knownAverage, 110);
+    assert.equal(plan.trials[1].countDelta, 1);
+    assert.equal(plan.trials[1].averageDelta, null);
+    assert.equal(plan.trials[1].belowMinimumCount, 1);
+    assert.equal(analysis.optimalDistribution[0].assignments[0].memberName, "Ada");
+    const swapped = Core.projectTrialPlan(analysis, aggregate, { 1: "mine", 2: "cook" });
+    assert.equal(swapped.trials[0].averageDelta, -30);
+    assert.equal(swapped.trials[1].averageDelta, -60);
 });
 
 test("assigns single-trial members before flexible members", () => {
