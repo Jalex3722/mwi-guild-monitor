@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.6
+// @version      0.9.7
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -58,12 +58,17 @@
     const DAY_MS = 86_400_000;
     const WEEK_MS = 7 * DAY_MS;
     const AURA_DEFINITIONS = [
-        { hrid: "/abilities/speed_aura", name: "Speed Aura", scalingSkillHrid: "/skills/attack" },
-        { hrid: "/abilities/guardian_aura", name: "Guardian Aura", scalingSkillHrid: "/skills/defense" },
-        { hrid: "/abilities/fierce_aura", name: "Fierce Aura", scalingSkillHrid: "/skills/melee" },
-        { hrid: "/abilities/critical_aura", name: "Critical Aura", scalingSkillHrid: "/skills/ranged" },
-        { hrid: "/abilities/mystic_aura", name: "Mystic Aura", scalingSkillHrid: "/skills/magic" },
+        { hrid: "/abilities/speed_aura", name: "Speed Aura", kind: "aura", scalingSkillHrid: "/skills/attack" },
+        { hrid: "/abilities/guardian_aura", name: "Guardian Aura", kind: "aura", scalingSkillHrid: "/skills/defense" },
+        { hrid: "/abilities/fierce_aura", name: "Fierce Aura", kind: "aura", scalingSkillHrid: "/skills/melee" },
+        { hrid: "/abilities/critical_aura", name: "Critical Aura", kind: "aura", scalingSkillHrid: "/skills/ranged" },
+        { hrid: "/abilities/mystic_aura", name: "Mystic Aura", kind: "aura", scalingSkillHrid: "/skills/magic" },
     ];
+    const UTILITY_DEFINITIONS = [
+        { hrid: "/abilities/insanity", name: "Insanity", kind: "utility", scalingSkillHrid: "" },
+        { hrid: "/abilities/revive", name: "Revive", kind: "utility", scalingSkillHrid: "" },
+    ];
+    const SPECIAL_ABILITY_DEFINITIONS = [...AURA_DEFINITIONS, ...UTILITY_DEFINITIONS];
 
     function asObject(value) {
         return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -697,6 +702,10 @@
         return AURA_DEFINITIONS.find((aura) => aura.hrid === auraHrid) || null;
     }
 
+    function getSpecialAbilityDefinition(abilityHrid) {
+        return SPECIAL_ABILITY_DEFINITIONS.find((ability) => ability.hrid === abilityHrid) || null;
+    }
+
     function getAuraAssignment(auraAssignments, memberId) {
         const assignment = asObject(auraAssignments)[String(memberId)];
         if (typeof assignment === "string") return assignment;
@@ -753,6 +762,7 @@
             };
         });
 
+        const memberById = new Map(currentMembers.map((member) => [String(member.id), member]));
         const makeTrial = (trialHrid, kind) => {
             const detail = trialDetails[trialHrid] || {};
             const signups = currentMembers
@@ -775,17 +785,19 @@
                 result[role] = (result[role] || 0) + 1;
                 return result;
             }, {});
+            const assignedMembersFor = (abilityHrid) => signups.filter((entry) => memberById.get(String(entry.memberId))?.desiredAuraHrid === abilityHrid);
             const auraCoverage = kind === "combat" ? AURA_DEFINITIONS.map((aura) => {
-                const assignedMembers = signups.filter((entry) => {
-                    const member = currentMembers.find((candidate) => candidate.id === entry.memberId);
-                    return member && member.desiredAuraHrid === aura.hrid;
-                });
+                const assignedMembers = assignedMembersFor(aura.hrid);
                 return {
                     ...aura,
                     members: assignedMembers,
                     count: assignedMembers.length,
                     status: assignedMembers.length === 0 ? "missing" : assignedMembers.length === 1 ? "covered" : "duplicate",
                 };
+            }) : [];
+            const utilityAssignments = kind === "combat" ? UTILITY_DEFINITIONS.map((ability) => {
+                const members = assignedMembersFor(ability.hrid);
+                return { ...ability, members, count: members.length };
             }) : [];
 
             return {
@@ -802,6 +814,7 @@
                 maxSignupLevel: knownLevels.length ? Math.max(...knownLevels) : null,
                 roles,
                 auraCoverage,
+                utilityAssignments,
                 auraCoveredCount: auraCoverage.filter((aura) => aura.status === "covered").length,
                 auraIssueCount: auraCoverage.filter((aura) => aura.status !== "covered").length,
             };
@@ -815,7 +828,6 @@
         }));
         const recommendations = buildSkillingRecommendations(eligibleMembers, skilling, aggregate.skills, trialDetails, skillDetails);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
-        const memberById = new Map(currentMembers.map((member) => [String(member.id), member]));
         const recommendationById = new Map(recommendations.map((entry) => [String(entry.memberId), entry]));
         const memberComparisons = currentMembers.map((member) => {
             const recommendation = recommendationById.get(String(member.id));
@@ -873,19 +885,20 @@
         const auraTracking = currentMembers
             .filter((member) => member.desiredAuraHrid)
             .map((member) => {
-                const aura = getAuraDefinition(member.desiredAuraHrid);
+                const ability = getSpecialAbilityDefinition(member.desiredAuraHrid);
                 const trial = combat.find((entry) => entry.trialHrid === member.currentCombatTrialHrid) || null;
-                const coverage = trial && trial.auraCoverage.find((entry) => entry.hrid === member.desiredAuraHrid);
+                const coverage = trial && ability?.kind === "aura" ? trial.auraCoverage.find((entry) => entry.hrid === member.desiredAuraHrid) : null;
                 return {
                     memberId: member.id,
                     memberName: member.name,
                     auraHrid: member.desiredAuraHrid,
-                    auraName: aura ? aura.name : prettifyHrid(member.desiredAuraHrid),
-                    scalingSkillHrid: aura ? aura.scalingSkillHrid : "",
-                    scalingLevel: aura ? getProfileSkillLevel(member, aura.scalingSkillHrid) : null,
+                    auraName: ability ? ability.name : prettifyHrid(member.desiredAuraHrid),
+                    kind: ability?.kind || "unknown",
+                    scalingSkillHrid: ability?.scalingSkillHrid || "",
+                    scalingLevel: ability?.scalingSkillHrid ? getProfileSkillLevel(member, ability.scalingSkillHrid) : null,
                     combatTrialHrid: member.currentCombatTrialHrid,
                     combatTrialName: trial ? trial.name : "Not signed up",
-                    status: !trial ? "unsigned" : coverage && coverage.status === "duplicate" ? "duplicate" : "covered",
+                    status: !trial ? "unsigned" : !ability ? "unknown" : ability.kind === "utility" ? "assigned" : coverage?.status || "missing",
                 };
             })
             .sort((left, right) => left.auraName.localeCompare(right.auraName) || left.memberName.localeCompare(right.memberName));
@@ -1142,6 +1155,10 @@
                     trial.trialHrid,
                     Object.fromEntries(trial.auraCoverage.map((aura) => [aura.hrid, aura.count])),
                 ])),
+                combatUtilityAssignments: Object.fromEntries(trialAnalysis.combat.map((trial) => [
+                    trial.trialHrid,
+                    Object.fromEntries(trial.utilityAssignments.map((ability) => [ability.hrid, ability.count])),
+                ])),
             };
         }
         return snapshot;
@@ -1156,7 +1173,7 @@
     function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}, memberTracking = [], guildWeekStartAt = null) {
         const skillHrids = aggregate.skills.map((skill) => skill.skillHrid);
         const trackingById = new Map((Array.isArray(memberTracking) ? memberTracking : []).map((entry) => [String(entry.memberId), entry]));
-        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Aura", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
+        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Special", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
         const rows = aggregate.members.map((member) => {
             const profile = member.profile;
             const tracking = trackingById.get(String(member.id));
@@ -1169,7 +1186,7 @@
                 prettifyHrid(member.role),
                 member.experience,
                 member.weeklyExperience,
-                (getAuraDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
+                (getSpecialAbilityDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
                 tracking && tracking.offlineDurationMs !== null ? (tracking.offlineDurationMs / DAY_MS).toFixed(1) : "",
                 tracking && tracking.offlineThreeDays ? "Yes" : "No",
                 previousWeekLabel,
@@ -1193,6 +1210,7 @@
 
     return {
         AURA_DEFINITIONS,
+        UTILITY_DEFINITIONS,
         DAY_MS,
         SKILL_THRESHOLDS,
         TOTAL_LEVEL_HRID,
@@ -1207,6 +1225,7 @@
         getProfileIdentity,
         getAuraAssignment,
         getAuraDefinition,
+        getSpecialAbilityDefinition,
         getItemName,
         getMarketQuote,
         getOfflineDurationMs,
@@ -1238,7 +1257,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.6";
+    const SCRIPT_VERSION = "0.9.7";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1719,12 +1738,14 @@ function startGuildMonitor(Core) {
             .mwigm-chip-alert { border-color: #a34f4f; color: #f19a91; }
             .mwigm-member-skills { display: block; color: #aebbd0; font-size: 11px; }
             .mwigm-aura-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 1px solid #31415c; }
+            .mwigm-utility-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid #31415c; }
             .mwigm-aura-summary { min-width: 0; padding: 9px 8px; border-right: 1px solid #31415c; text-align: center; }
             .mwigm-aura-summary:last-child { border-right: 0; }
             .mwigm-aura-summary strong { display: block; color: #f5f8fc; }
             .mwigm-aura-summary span { color: #8fa0b7; font-size: 10px; }
             .mwigm-aura-select { width: 100%; min-width: 110px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
             .mwigm-aura-table, .mwigm-aura-coverage { min-width: 760px; }
+            .mwigm-utility-coverage { min-width: 520px; }
             .mwigm-aura-missing { color: #efbd70; }
             .mwigm-aura-duplicate { color: #ef8f82; }
             .mwigm-economy-table { min-width: 800px; }
@@ -1902,7 +1923,7 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
         if (state.activeTab === "results") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">`;
         }
@@ -1915,7 +1936,7 @@ function startGuildMonitor(Core) {
         const sortOptions = state.activeTab === "skills"
             ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
             : state.activeTab === "auras"
-            ? `<option value="name">Member name</option><option value="aura">Aura type</option><option value="unsigned">Unsigned first</option>`
+            ? `<option value="name">Member name</option><option value="aura">Special ability</option><option value="unsigned">Unsigned first</option>`
             : state.activeTab === "members"
             ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option><option value="freshness">Oldest profile</option>`
             : `<option value="name">Member name</option><option value="total">Highest total</option><option value="freshness">Oldest profile</option>`;
@@ -2023,8 +2044,8 @@ function startGuildMonitor(Core) {
             const trialSuggestion = medianSuggestionById.get(String(member.id));
             const total = profile ? profile.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID) : null;
             const strongest = Core.strongestSkill(member, state.skillDetails);
-            const auraHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
-            const aura = Core.getAuraDefinition(auraHrid);
+            const specialHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
+            const special = Core.getSpecialAbilityDefinition(specialHrid);
             const currentSignup = Core.isCurrentSignup(member, weekStart);
             const skillingTrial = currentSignup && member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const combatTrial = currentSignup && member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
@@ -2043,7 +2064,7 @@ function startGuildMonitor(Core) {
                 : "";
             return `
                 <tr>
-                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${aura ? `<span class="mwigm-member-skills">Aura: ${escapeHtml(aura.name)}</span>` : ""}</td>
+                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${special ? `<span class="mwigm-member-skills">Special: ${escapeHtml(special.name)}</span>` : ""}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
@@ -2159,9 +2180,19 @@ function startGuildMonitor(Core) {
             return `<tr><td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span><br><span class="mwigm-subtext">${trial.auraCoveredCount}/5 exact coverage</span></td>${cells}</tr>`;
         }).join("");
         const headers = Core.AURA_DEFINITIONS.map((aura) => `<th>${escapeHtml(aura.name.replace(" Aura", ""))}</th>`).join("");
+        const utilityRows = analysis.combat.map((trial) => {
+            const cells = trial.utilityAssignments.map((ability) => {
+                const names = ability.members.map((member) => member.memberName).join(", ");
+                return `<td><strong>${ability.count}</strong><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(names || "None assigned")}</span></td>`;
+            }).join("");
+            return `<tr><td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span></td>${cells}</tr>`;
+        }).join("");
+        const utilityHeaders = Core.UTILITY_DEFINITIONS.map((ability) => `<th>${escapeHtml(ability.name)}</th>`).join("");
         return `
             <div class="mwigm-section-title">Combat aura coverage <span>Exactly one of each desired aura</span></div>
             <table class="mwigm-table mwigm-aura-coverage"><thead><tr><th style="width:22%">Trial</th>${headers}</tr></thead><tbody>${rows}</tbody></table>
+            <div class="mwigm-section-title">Combat utility assignments</div>
+            <table class="mwigm-table mwigm-utility-coverage"><thead><tr><th>Trial</th>${utilityHeaders}</tr></thead><tbody>${utilityRows}</tbody></table>
         `;
     }
 
@@ -2169,19 +2200,21 @@ function startGuildMonitor(Core) {
         const analysis = currentTrialAnalysis(aggregate);
         const assignments = state.guildStore ? state.guildStore.auraAssignments : {};
         const query = state.query.toLocaleLowerCase();
-        const counts = Core.AURA_DEFINITIONS.map((aura) => ({
-            ...aura,
-            count: aggregate.members.filter((member) => Core.getAuraAssignment(assignments, member.id) === aura.hrid).length,
+        const countsFor = (definitions) => definitions.map((ability) => ({
+            ...ability,
+            count: aggregate.members.filter((member) => Core.getAuraAssignment(assignments, member.id) === ability.hrid).length,
         }));
+        const auraCounts = countsFor(Core.AURA_DEFINITIONS);
+        const utilityCounts = countsFor(Core.UTILITY_DEFINITIONS);
         let members = aggregate.members.filter((member) => {
-            const aura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, member.id));
-            return member.name.toLocaleLowerCase().includes(query) || (aura && aura.name.toLocaleLowerCase().includes(query));
+            const ability = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, member.id));
+            return member.name.toLocaleLowerCase().includes(query) || (ability && ability.name.toLocaleLowerCase().includes(query));
         });
         if (state.sort === "aura") {
             members = [...members].sort((left, right) => {
-                const leftAura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, left.id));
-                const rightAura = Core.getAuraDefinition(Core.getAuraAssignment(assignments, right.id));
-                return (leftAura ? leftAura.name : "Zzz").localeCompare(rightAura ? rightAura.name : "Zzz") || left.name.localeCompare(right.name);
+                const leftAbility = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, left.id));
+                const rightAbility = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, right.id));
+                return (leftAbility ? leftAbility.name : "Zzz").localeCompare(rightAbility ? rightAbility.name : "Zzz") || left.name.localeCompare(right.name);
             });
         } else if (state.sort === "unsigned") {
             const weekStart = Core.resolveGuildWeekStart(state.guild);
@@ -2190,24 +2223,30 @@ function startGuildMonitor(Core) {
             members = [...members].sort((left, right) => left.name.localeCompare(right.name));
         }
 
-        const summary = `<div class="mwigm-aura-grid">${counts.map((aura) => `<div class="mwigm-aura-summary"><strong>${aura.count}</strong><span>${escapeHtml(aura.name)}</span></div>`).join("")}</div>`;
+        const summary = `
+            <div class="mwigm-section-title">Auras</div>
+            <div class="mwigm-aura-grid">${auraCounts.map((ability) => `<div class="mwigm-aura-summary"><strong>${ability.count}</strong><span>${escapeHtml(ability.name)}</span></div>`).join("")}</div>
+            <div class="mwigm-section-title">Utility abilities</div>
+            <div class="mwigm-utility-grid">${utilityCounts.map((ability) => `<div class="mwigm-aura-summary"><strong>${ability.count}</strong><span>${escapeHtml(ability.name)}</span></div>`).join("")}</div>
+        `;
         const options = (selected) => [
-            `<option value="">No aura assigned</option>`,
-            ...Core.AURA_DEFINITIONS.map((aura) => `<option value="${escapeHtml(aura.hrid)}"${aura.hrid === selected ? " selected" : ""}>${escapeHtml(aura.name)}</option>`),
+            `<option value="">No special assigned</option>`,
+            `<optgroup label="Auras">${Core.AURA_DEFINITIONS.map((ability) => `<option value="${escapeHtml(ability.hrid)}"${ability.hrid === selected ? " selected" : ""}>${escapeHtml(ability.name)}</option>`).join("")}</optgroup>`,
+            `<optgroup label="Utility abilities">${Core.UTILITY_DEFINITIONS.map((ability) => `<option value="${escapeHtml(ability.hrid)}"${ability.hrid === selected ? " selected" : ""}>${escapeHtml(ability.name)}</option>`).join("")}</optgroup>`,
         ].join("");
         const rows = members.map((member) => {
-            const auraHrid = Core.getAuraAssignment(assignments, member.id);
-            const aura = Core.getAuraDefinition(auraHrid);
-            const scalingSkill = aura && member.profile ? member.profile.skills.find((skill) => skill.skillHrid === aura.scalingSkillHrid) : null;
+            const abilityHrid = Core.getAuraAssignment(assignments, member.id);
+            const ability = Core.getSpecialAbilityDefinition(abilityHrid);
+            const scalingSkill = ability?.scalingSkillHrid && member.profile ? member.profile.skills.find((skill) => skill.skillHrid === ability.scalingSkillHrid) : null;
             const trial = analysis.combat.find((entry) => entry.signups.some((signup) => signup.memberId === member.id));
             const tracking = analysis.auraTracking.find((entry) => entry.memberId === member.id);
-            const statusClass = !tracking ? "" : tracking.status === "unsigned" || tracking.status === "duplicate" ? "mwigm-chip-warn" : "mwigm-chip-good";
-            const statusText = !aura ? "Unassigned" : !trial ? "Not signed" : tracking && tracking.status === "duplicate" ? "Duplicate" : "Covered";
+            const statusClass = !tracking || tracking.status === "unknown" ? "" : tracking.status === "unsigned" || tracking.status === "duplicate" ? "mwigm-chip-warn" : "mwigm-chip-good";
+            const statusText = !ability ? "Unassigned" : !trial ? "Not signed" : ability.kind === "utility" ? "Assigned" : tracking?.status === "duplicate" ? "Duplicate" : "Covered";
             return `
                 <tr>
                     <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${trial ? escapeHtml(trial.name) : "Not signed"}</span></td>
-                    <td><select class="mwigm-aura-select" data-aura-member-id="${escapeHtml(member.id)}" aria-label="Desired aura for ${escapeHtml(member.name)}">${options(auraHrid)}</select></td>
-                    <td>${aura ? `${escapeHtml(Core.getSkillName(aura.scalingSkillHrid, state.skillDetails))} ${scalingSkill ? scalingSkill.level : "--"}` : "--"}</td>
+                    <td><select class="mwigm-aura-select" data-aura-member-id="${escapeHtml(member.id)}" aria-label="Desired special ability for ${escapeHtml(member.name)}">${options(abilityHrid)}</select></td>
+                    <td>${ability?.scalingSkillHrid ? `${escapeHtml(Core.getSkillName(ability.scalingSkillHrid, state.skillDetails))} ${scalingSkill ? scalingSkill.level : "--"}` : "--"}</td>
                     <td>${trial ? escapeHtml(trial.name) : "Not signed"}</td>
                     <td><span class="mwigm-chip ${statusClass}">${statusText}</span></td>
                 </tr>
@@ -2216,8 +2255,8 @@ function startGuildMonitor(Core) {
 
         return `
             ${summary}
-            <div class="mwigm-notice mwigm-notice-info">Choose the primary aura each member is expected to bring. Assignments are planning labels stored only in this browser; they do not inspect loadouts or change trial signups.</div>
-            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired aura</th><th>Scaling skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
+            <div class="mwigm-notice mwigm-notice-info">One designated special ability per member. Assignments are planning labels stored only in this browser; equipped abilities and trial loadouts are not verified.</div>
+            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired special</th><th>Aura skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
         `;
     }
 

@@ -541,16 +541,54 @@ test("tracks exact-one aura coverage for each combat trial", () => {
     assert.equal(mystic.status, "missing");
     assert.equal(badger.auraCoveredCount, 1);
     assert.equal(noether.status, "unsigned");
+    assert.equal(badger.utilityAssignments.find((ability) => ability.name === "Revive").count, 0);
 });
 
-test("includes desired aura in CSV exports", () => {
-    const aggregate = Core.aggregateGuild([roster[0]], profiles);
+test("tracks Insanity and Revive without changing exact-one aura coverage", () => {
+    const members = [
+        { id: "1", name: "Ada", signedUpCombatTrialHrid: "badger" },
+        { id: "2", name: "Babbage", signedUpCombatTrialHrid: "badger" },
+        { id: "3", name: "Curie", signedUpCombatTrialHrid: "badger" },
+        { id: "4", name: "Noether", signedUpCombatTrialHrid: "" },
+    ];
+    const aggregate = Core.aggregateGuild(members, {});
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { skillHrids: [], combatHrids: ["badger"] },
+        trialDetails: { badger: { kind: "combat", name: "Badger" } },
+        auraAssignments: {
+            1: { auraHrid: "/abilities/insanity" },
+            2: { auraHrid: "/abilities/revive" },
+            3: { auraHrid: "/abilities/revive" },
+            4: { auraHrid: "/abilities/insanity" },
+        },
+    });
+    const trial = analysis.combat[0];
+    const insanity = trial.utilityAssignments.find((ability) => ability.name === "Insanity");
+    const revive = trial.utilityAssignments.find((ability) => ability.name === "Revive");
+    const snapshot = Core.makeSnapshot({ id: "guild", name: "Guild" }, aggregate, 1, analysis);
+
+    assert.equal(Core.getAuraDefinition("/abilities/revive"), null);
+    assert.equal(Core.getSpecialAbilityDefinition("/abilities/revive").kind, "utility");
+    assert.deepEqual(insanity.members.map((member) => member.memberName), ["Ada"]);
+    assert.deepEqual(revive.members.map((member) => member.memberName), ["Babbage", "Curie"]);
+    assert.equal(trial.auraCoveredCount, 0);
+    assert.equal(trial.auraIssueCount, 5);
+    assert.equal(analysis.auraTracking.find((entry) => entry.memberName === "Babbage").status, "assigned");
+    assert.equal(analysis.auraTracking.find((entry) => entry.memberName === "Noether").status, "unsigned");
+    assert.equal(snapshot.trials.combatUtilityAssignments.badger["/abilities/revive"], 2);
+});
+
+test("includes desired special abilities in CSV exports", () => {
+    const aggregate = Core.aggregateGuild([roster[0], roster[1]], profiles);
     const csv = Core.toCsv(aggregate, {}, {}, {
         1: { auraHrid: "/abilities/critical_aura" },
+        2: { auraHrid: "/abilities/revive" },
     });
 
-    assert.match(csv, /Desired Aura/);
+    assert.match(csv, /Desired Special/);
     assert.match(csv, /Critical Aura/);
+    assert.match(csv, /Revive/);
 });
 
 test("flags only known offline durations of at least three days", () => {

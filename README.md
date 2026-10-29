@@ -21,13 +21,14 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 - Previous-week signup tracking, with an unsigned status recorded only when neither trial category was joined
 - Per-trial signup levels, level ranges, minimum requirements, and member rosters
 - Combat role distribution for each combat trial
-- Manual desired-aura assignments for guild members
+- Manual special-ability assignments for guild members, including Insanity and Revive
 - Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
-- Aura-player tracking for unsigned and incorrectly grouped designated players
+- Per-combat-trial Insanity and Revive counts with assigned player names
+- Member-level assignment status for designated special-ability users
 - First and second weekly trial choices ranked by each member's level relative to the captured guild median
 - Cheapest market-priced material conversion for every guild credit type
 - Incremental and cumulative coin estimates for every guild shrine level
-- CSV export for Excel or Google Sheets, including guild XP, offline duration, prior-week status, trial signups, and aura assignments
+- CSV export for Excel or Google Sheets, including guild XP, offline duration, prior-week status, trial signups, and special-ability assignments
 - Local-only storage in the current browser
 
 ## Install
@@ -40,7 +41,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.6`.
+The monitor header displays its running version. The current release is `v0.9.7`.
 
 ## Collecting member skill data
 
@@ -88,19 +89,21 @@ Combat recommendations are not generated. Combat level alone cannot account for 
 
 The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
 
-## Aura planning
+## Special ability planning
 
-Open the **Auras** tab to assign one desired aura to each designated guild member. The available choices match the current combat aura set:
+Open the **Auras** tab to designate one special ability per guild member. The choices include five auras and two utility abilities:
 
 - Speed Aura, scaling with Attack
 - Guardian Aura, scaling with Defense
 - Fierce Aura, scaling with Melee
 - Critical Aura, scaling with Ranged
 - Mystic Aura, scaling with Magic
+- Insanity
+- Revive
 
-The assignment table shows the member's captured scaling-skill level and current combat-trial signup. The Trials tab then evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial.
+The assignment table shows a captured scaling-skill level for auras and the member's current combat-trial signup. The Trials tab evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial. Insanity and Revive are listed separately with their assigned player names and counts; multiple users are allowed and they do not affect aura coverage.
 
-Aura assignments are manual planning labels. The script does not inspect equipped trial loadouts, equip abilities, or change signups. Assignments are saved per guild in the same local browser storage as captured profiles.
+Special-ability assignments are manual planning labels. The script does not inspect equipped trial loadouts, equip abilities, or change signups. Existing aura assignments are preserved, and all assignments are saved per guild in the same local browser storage as captured profiles.
 
 ## Shrine economics
 
@@ -113,7 +116,7 @@ Shrine estimates are grouped under collapsible Force, Tempo, Spirit, Rarity, and
 ## Privacy and safety
 
 - No account tokens, passwords, inventory, chat, or private messages are stored.
-- Only the current guild roster, captured member skill levels, manual aura assignments, weekly participation observations, trial summaries, aggregate snapshots, and the latest official market snapshot are stored.
+- Only the current guild roster, captured member skill levels, manual special-ability assignments, weekly participation observations, trial summaries, aggregate snapshots, and the latest official market snapshot are stored.
 - Data stays in `localStorage` for `milkywayidle.com` unless you export a CSV.
 - The only added network traffic is a cached GET to Milky Way Idle's official `game_data/marketplace.json`; there are no third-party analytics, gameplay requests, or WebSocket send calls.
 
