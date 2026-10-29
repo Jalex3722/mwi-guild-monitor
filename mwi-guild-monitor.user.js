@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.5
+// @version      0.9.6
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -32,6 +32,29 @@
 
     const TOTAL_LEVEL_HRID = "/skills/total_level";
     const SKILL_THRESHOLDS = [100, 125, 150];
+    const TOTAL_LEVEL_THRESHOLDS = [1500, 1800, 2000];
+    const SKILL_EMOJIS = {
+        "/skills/total_level": "🏅",
+        "/skills/milking": "🥛",
+        "/skills/foraging": "🌿",
+        "/skills/woodcutting": "🪓",
+        "/skills/mining": "⛏️",
+        "/skills/cheesesmithing": "🧀",
+        "/skills/crafting": "🔨",
+        "/skills/tailoring": "🧵",
+        "/skills/cooking": "🍳",
+        "/skills/brewing": "🍵",
+        "/skills/alchemy": "⚗️",
+        "/skills/enhancing": "✨",
+        "/skills/attack": "⚔️",
+        "/skills/defense": "🛡️",
+        "/skills/melee": "🗡️",
+        "/skills/ranged": "🏹",
+        "/skills/magic": "🔮",
+        "/skills/stamina": "💪",
+        "/skills/intelligence": "🧠",
+        "/skills/combat": "⚔️",
+    };
     const DAY_MS = 86_400_000;
     const WEEK_MS = 7 * DAY_MS;
     const AURA_DEFINITIONS = [
@@ -71,6 +94,10 @@
     function getSkillName(hrid, skillDetails = {}) {
         const detail = skillDetails[hrid] || {};
         return detail.name || detail.displayName || prettifyHrid(hrid);
+    }
+
+    function getSkillEmoji(hrid) {
+        return Object.prototype.hasOwnProperty.call(SKILL_EMOJIS, hrid) ? SKILL_EMOJIS[hrid] : "✦";
     }
 
     function median(values) {
@@ -210,7 +237,8 @@
                 const maxLevel = Math.max(...entries.map((entry) => entry.level));
                 const minMembers = entries.filter((entry) => entry.level === minLevel).map((entry) => entry.memberName);
                 const maxMembers = entries.filter((entry) => entry.level === maxLevel).map((entry) => entry.memberName);
-                const thresholdCounts = Object.fromEntries(SKILL_THRESHOLDS.map((threshold) => {
+                const thresholds = skillHrid === TOTAL_LEVEL_HRID ? [...SKILL_THRESHOLDS, ...TOTAL_LEVEL_THRESHOLDS] : SKILL_THRESHOLDS;
+                const thresholdCounts = Object.fromEntries(thresholds.map((threshold) => {
                     const members = entries
                         .filter((entry) => entry.level > threshold)
                         .sort((left, right) => right.level - left.level || left.memberName.localeCompare(right.memberName));
@@ -1096,6 +1124,11 @@
                     above150: skill.thresholdCounts[150].count,
                     sampleSize: skill.sampleSize,
                 };
+                if (skill.skillHrid === TOTAL_LEVEL_HRID) {
+                    TOTAL_LEVEL_THRESHOLDS.forEach((threshold) => {
+                        result[skill.skillHrid][`above${threshold}`] = skill.thresholdCounts[threshold].count;
+                    });
+                }
                 return result;
             }, {}),
         };
@@ -1161,7 +1194,9 @@
     return {
         AURA_DEFINITIONS,
         DAY_MS,
+        SKILL_THRESHOLDS,
         TOTAL_LEVEL_HRID,
+        TOTAL_LEVEL_THRESHOLDS,
         aggregateGuild,
         analyzeGuildEconomy,
         analyzeTrials,
@@ -1178,6 +1213,7 @@
         getTrialCapacity,
         isCurrentSignup,
         getSkillName,
+        getSkillEmoji,
         getTrialName,
         makeSnapshot,
         median,
@@ -1202,7 +1238,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.5";
+    const SCRIPT_VERSION = "0.9.6";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1655,6 +1691,9 @@ function startGuildMonitor(Core) {
             .mwigm-skill-stat .mwigm-subtext { overflow-wrap: anywhere; }
             .mwigm-skill-row:hover { background: #17243a; }
             .mwigm-skill-name, .mwigm-member-name { color: #f6f8fc; font-weight: 600; }
+            .mwigm-skill-heading { display: flex; align-items: center; gap: 5px; min-width: 0; }
+            .mwigm-skill-primary .mwigm-skill-icon { flex: 0 0 19px; color: #f6f8fc; font: 16px/1.2 "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif; text-align: center; }
+            .mwigm-skill-primary .mwigm-skill-name { color: #f6f8fc; font-size: 12px; overflow-wrap: anywhere; }
             .mwigm-member-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; white-space: normal; }
             .mwigm-subtext { color: #92a2b9; font-size: 11px; }
             .mwigm-up { color: #68d5a9; }
@@ -1927,6 +1966,7 @@ function startGuildMonitor(Core) {
             const oldValue = previous && previous.skills && previous.skills[skill.skillHrid];
             const delta = oldValue ? skill.average - oldValue.average : null;
             const maxNames = skill.maxMembers.join(", ");
+            const thresholds = skill.skillHrid === Core.TOTAL_LEVEL_HRID ? Core.TOTAL_LEVEL_THRESHOLDS : Core.SKILL_THRESHOLDS;
             const thresholdStat = (threshold) => {
                 const summary = skill.thresholdCounts[threshold];
                 const names = summary.members.map((member) => `${member.memberName} (${member.level})`).join(", ") || "No members";
@@ -1934,7 +1974,9 @@ function startGuildMonitor(Core) {
             };
             const gap = gapBySkill.get(skill.skillHrid);
             const gapNames = gap ? gap.members.map((member) => `${member.memberName} (${member.level})`) : [];
-            const gapStat = !gap
+            const gapStat = skill.skillHrid === Core.TOTAL_LEVEL_HRID
+                ? `<div class="mwigm-skill-stat"><span>Trial</span><strong class="mwigm-muted">--</strong></div>`
+                : !gap
                 ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="This skill is not offered in the current weekly trial set"><span>Over 125 not in trial</span><strong>--</strong></div>`
                 : gapNames.length
                 ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="${escapeHtml(gapNames.join(", "))}"><span>Over 125 not in trial</span><strong>${gapNames.length}</strong><span class="mwigm-subtext">${escapeHtml(gapNames.join(", "))}</span></div>`
@@ -1942,13 +1984,11 @@ function startGuildMonitor(Core) {
             return `
                 <div class="mwigm-skill-row" title="Minimum: ${escapeHtml(skill.minMembers.join(", "))}">
                     <div class="mwigm-skill-primary">
-                        <span class="mwigm-skill-name">${escapeHtml(skill.name)}</span>
+                        <div class="mwigm-skill-heading"><span class="mwigm-skill-icon" aria-hidden="true">${Core.getSkillEmoji(skill.skillHrid)}</span><span class="mwigm-skill-name">${escapeHtml(skill.name)}</span></div>
                         <span>${skill.sampleSize} member${skill.sampleSize === 1 ? "" : "s"} · Average ${skill.average.toFixed(1)} · Median ${Number.isFinite(skill.median) ? skill.median.toFixed(1) : "--"} · Minimum ${skill.minLevel}</span>
                         <span title="${escapeHtml(maxNames)}">Highest ${skill.maxLevel} · ${escapeHtml(maxNames)}</span>
                     </div>
-                    ${thresholdStat(100)}
-                    ${thresholdStat(125)}
-                    ${thresholdStat(150)}
+                    ${thresholds.map(thresholdStat).join("")}
                     ${gapStat}
                     <div class="mwigm-skill-stat"><span>Change</span><strong class="${delta !== null && delta > 0 ? "mwigm-up" : "mwigm-muted"}">${formatDelta(delta)}</strong></div>
                 </div>

@@ -64,6 +64,36 @@ test("calculates average, minimum, maximum, and coverage", () => {
     assert.equal(cooking.thresholdCounts[100].count, 0);
 });
 
+test("tracks total levels over 1500, 1800, and 2000", () => {
+    const levels = [1500, 1800, 2000, 2001];
+    const members = levels.map((_, index) => ({ id: String(index + 1), name: `Member ${index + 1}` }));
+    const captured = Object.fromEntries(members.map((member, index) => [member.id, {
+        id: member.id, name: member.name, capturedAt: 1,
+        skills: [
+            { skillHrid: Core.TOTAL_LEVEL_HRID, level: levels[index] },
+            { skillHrid: "/skills/cooking", level: 151 },
+        ],
+    }]));
+    const aggregate = Core.aggregateGuild(members, captured);
+    const total = aggregate.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID);
+    const cooking = aggregate.skills.find((skill) => skill.skillHrid === "/skills/cooking");
+    const snapshot = Core.makeSnapshot({ id: "guild", name: "Guild" }, aggregate);
+
+    assert.deepEqual(Core.TOTAL_LEVEL_THRESHOLDS, [1500, 1800, 2000]);
+    assert.equal(total.thresholdCounts[1500].count, 3);
+    assert.equal(total.thresholdCounts[1800].count, 2);
+    assert.deepEqual(total.thresholdCounts[2000].members.map((member) => member.memberName), ["Member 4"]);
+    assert.equal(cooking.thresholdCounts[150].count, 4);
+    assert.equal(cooking.thresholdCounts[1500], undefined);
+    assert.equal(snapshot.skills[Core.TOTAL_LEVEL_HRID].above2000, 1);
+});
+
+test("provides skill emojis with a fallback", () => {
+    assert.equal(Core.getSkillEmoji(Core.TOTAL_LEVEL_HRID), "🏅");
+    assert.equal(Core.getSkillEmoji("/skills/milking"), "🥛");
+    assert.equal(Core.getSkillEmoji("/skills/new_skill"), "✦");
+});
+
 test("normalizes a profile response", () => {
     const profile = Core.normalizeProfile({
         sharableCharacter: { id: 7, name: "Grace" },
