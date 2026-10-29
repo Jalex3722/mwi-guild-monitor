@@ -39,7 +39,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.2`.
+The monitor header displays its running version. The current release is `v0.9.3`.
 
 ## Collecting member skill data
 
@@ -75,9 +75,11 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Combat role counts for each combat trial
 - Actual skilling signups alongside calculated target positions for members with eligible captured levels
 
-The optimizer considers every guild member with at least one eligible captured level for the current skilling trials, including members who did not sign up. It respects guild minimum levels and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and maximizes the sum of known per-trial averages of `member level - captured guild median`. If minimum levels make balanced rosters infeasible, the script shows a best-fit fallback. The member-by-member comparison lists everyone, with their actual signup, calculated position, and status. Members without enough captured level data show **Unknown**, not a copied signup or invented recommendation. **Different signup** means the current choice differs from this level-based target; it does not mean that choice is necessarily wrong.
+The optimizer considers every guild member with at least one eligible captured level for the current skilling trials, including members who did not sign up. It respects guild minimum levels and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and maximizes the sum of the four trial averages of captured skill levels. The sum is shown only when all available skilling trials have recommended members. If minimum levels make balanced rosters infeasible, the script shows a best-fit fallback. The member-by-member comparison lists everyone, with their actual signup, calculated position, and status. Members without enough captured level data show **Unknown**, not a copied signup or invented recommendation. **Different signup** means the current choice differs from this level-based target; it does not mean that choice is necessarily wrong.
 
 The Trials tab displays actual signup rosters and signup-time levels when available, then compares actual and optimized rosters using captured profile levels for both averages. Actual averages show how many signed members have captured profiles. Players without captured profiles cannot be optimized; check **Missing profiles** before using the plan for decisions. The optimizer does not enforce signup slot caps or model equipment, buffs, and availability.
+
+Below the recommended distribution, **Missing recommended skilling signup** lists eligible members with no skilling signup, including combat-only members. **Signed for a different skilling trial** separately lists members whose actual skilling signup differs from their calculated assignment. These lists use captured profiles only; unknown members are not treated as mismatches.
 
 The Trials signup tables show current slots and remaining capacity. Capacity follows the game's base of 20 skilling or 40 combat slots per trial plus the relevant Encampment building bonus. If the client has not supplied the building's per-level bonus definition, capacity is shown as unknown rather than guessed.
 

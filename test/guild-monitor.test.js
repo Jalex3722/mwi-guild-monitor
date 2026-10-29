@@ -231,6 +231,9 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage", "Curie", "Noether"]);
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Curie").signupStatus, "combatOnly");
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Noether").signupStatus, "unsigned");
+    assert.deepEqual(analysis.missingRecommendedSignup.map((entry) => entry.memberName).sort(), ["Curie", "Noether"]);
+    assert.deepEqual(analysis.wrongRecommendedSignup.map((entry) => entry.memberName), ["Babbage"]);
+    assert.equal(analysis.wrongRecommendedSignup[0].currentTrialName, "Mine");
     assert.equal(analysis.optimalDistribution[0].assignments.length, 4);
 });
 
@@ -293,6 +296,8 @@ test("recommends all eligible members and leaves missing profiles unknown", () =
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Curie").signupStatus, "missingProfile");
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Noether").signupStatus, "missingProfile");
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Unsigned").signupStatus, "unsigned");
+    assert.deepEqual(analysis.missingRecommendedSignup.map((entry) => entry.memberName), ["Unsigned"]);
+    assert.ok(analysis.wrongRecommendedSignup.every((entry) => entry.currentTrialHrid && entry.currentTrialHrid !== entry.recommendedTrialHrid));
     assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.unknownActualCount, 0), 2);
     assert.equal(analysis.allocationBalanced, true);
 });
@@ -329,6 +334,8 @@ test("assigns single-trial members before flexible members", () => {
     assert.equal(flexible.currentTrialHrid, "cook");
     assert.equal(flexible.recommendedTrialHrid, "mine");
     assert.equal(flexible.signupStatus, "different");
+    assert.deepEqual(analysis.wrongRecommendedSignup.map((entry) => entry.memberName), ["Flexible"]);
+    assert.deepEqual(analysis.missingRecommendedSignup, []);
 
     const changedSignups = Core.aggregateGuild([
         { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "mine" },
@@ -348,11 +355,11 @@ test("assigns single-trial members before flexible members", () => {
     assert.equal(changedAnalysis.memberComparisons.find((entry) => entry.memberName === "Cooking only").signupStatus, "different");
 });
 
-test("globally maximizes the sum of balanced trial averages above guild medians", () => {
-    const trialHrids = ["cook", "mine", "brew"];
-    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing"];
+test("globally maximizes the combined average of four balanced skilling trials", () => {
+    const trialHrids = ["cook", "mine", "brew", "wood"];
+    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing", "/skills/woodcutting"];
     const trialDetails = Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }]));
-    const roster = Array.from({ length: 5 }, (_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % 3] }));
+    const roster = Array.from({ length: 6 }, (_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % trialHrids.length] }));
     let seed = 197;
     const random = () => ((seed = (seed * 48271) % 2147483647) % 66) + 85;
 
@@ -369,28 +376,55 @@ test("globally maximizes the sum of balanced trial averages above guild medians"
             weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
             trialDetails,
         });
-        const medians = skillHrids.map((hrid) => aggregate.skills.find((skill) => skill.skillHrid === hrid).median);
         const levels = roster.map((member) => skillHrids.map((hrid) => profiles[member.id].skills.find((skill) => skill.skillHrid === hrid).level));
         const score = (choices) => {
             const counts = trialHrids.map((_, trial) => choices.filter((choice) => choice === trial).length);
-            if (Math.max(...counts) - Math.min(...counts) > 1) return -Infinity;
+            if (counts.some((count) => !count) || Math.max(...counts) - Math.min(...counts) > 1) return -Infinity;
             return trialHrids.reduce((sum, _, trial) => sum + choices.reduce((total, choice, member) =>
-                total + (choice === trial ? levels[member][trial] - medians[trial] : 0), 0) / counts[trial], 0);
+                total + (choice === trial ? levels[member][trial] : 0), 0) / counts[trial], 0);
         };
         let maximum = -Infinity;
-        for (let encoded = 0; encoded < 3 ** roster.length; encoded += 1) {
+        for (let encoded = 0; encoded < trialHrids.length ** roster.length; encoded += 1) {
             let remaining = encoded;
             const choices = roster.map(() => {
-                const choice = remaining % 3;
-                remaining = Math.floor(remaining / 3);
+                const choice = remaining % trialHrids.length;
+                remaining = Math.floor(remaining / trialHrids.length);
                 return choice;
             });
             maximum = Math.max(maximum, score(choices));
         }
         const recommended = roster.map((member) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === member.id).recommendedTrialHrid));
         assert.ok(Math.abs(score(recommended) - maximum) < 1e-8, `fixture ${fixture}`);
+        assert.ok(Math.abs(analysis.combinedTargetAverage - maximum) < 1e-8, `combined average ${fixture}`);
+        assert.equal(analysis.targetCoveredTrialCount, 4);
         assert.equal(analysis.allocationBalanced, true);
     }
+});
+
+test("equal-level recommendations do not copy current signups", () => {
+    const trials = ["cook", "mine", "brew", "wood"];
+    const skills = ["/skills/cooking", "/skills/mining", "/skills/brewing", "/skills/woodcutting"];
+    const profiles = Object.fromEntries(trials.map((_, index) => [String(index + 1), {
+        id: String(index + 1), name: `Member ${index + 1}`, capturedAt: 1,
+        skills: skills.map((skillHrid) => ({ skillHrid, level: 100 })),
+    }]));
+    const analyze = (signupForMember) => Core.analyzeTrials({
+        aggregate: Core.aggregateGuild(trials.map((_, index) => ({
+            id: String(index + 1), name: `Member ${index + 1}`,
+            signedUpSkillingTrialHrid: signupForMember(index),
+        })), profiles),
+        weeklyTrialSet: { skillHrids: trials, combatHrids: [] },
+        trialDetails: Object.fromEntries(trials.map((hrid, index) => [hrid, { skillHrid: skills[index] }])),
+    });
+    const unsigned = analyze(() => "");
+    const positions = (analysis) => Object.fromEntries(analysis.recommendations.map((entry) => [entry.memberId, entry.recommendedTrialHrid]));
+    const targetByMember = positions(unsigned);
+    const signed = analyze((index) => trials[(trials.indexOf(targetByMember[String(index + 1)]) + 1) % trials.length]);
+
+    assert.deepEqual(positions(signed), positions(unsigned));
+    assert.equal(signed.combinedTargetAverage, 400);
+    assert.equal(unsigned.missingRecommendedSignup.length, 4);
+    assert.equal(signed.wrongRecommendedSignup.length, 4);
 });
 
 test("marks an infeasible even roster and retains every eligible member", () => {
@@ -413,6 +447,7 @@ test("marks an infeasible even roster and retains every eligible member", () => 
     assert.equal(analysis.recommendations.length, 2);
     assert.equal(analysis.optimalDistribution[0].actualAverageLevel, 115);
     assert.equal(analysis.optimalDistribution[0].targetAverageLevel, 115);
+    assert.equal(analysis.combinedTargetAverage, null);
 });
 
 test("global trial assignment respects level minimums", () => {
