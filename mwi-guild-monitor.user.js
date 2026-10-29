@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.4
+// @version      0.9.5
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1202,7 +1202,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.4";
+    const SCRIPT_VERSION = "0.9.5";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1692,12 +1692,6 @@ function startGuildMonitor(Core) {
             .mwigm-slot-track { height: 5px; margin-top: 5px; background: #334158; border-radius: 3px; overflow: hidden; }
             .mwigm-slot-fill { height: 100%; background: #68d5a9; }
             .mwigm-slot-fill[data-near="true"] { background: #efbd70; }
-            #${SCRIPT_ID}-panel .mwigm-target-member { font-weight: 650; }
-            #${SCRIPT_ID}-panel .mwigm-target-member::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: middle; }
-            #${SCRIPT_ID}-panel .mwigm-target-aligned { color: #77d2b2 !important; }
-            #${SCRIPT_ID}-panel .mwigm-target-different { color: #efbd70 !important; }
-            #${SCRIPT_ID}-panel .mwigm-target-unsigned { color: #f19a91 !important; }
-            #${SCRIPT_ID}-panel .mwigm-target-unassessed { color: #aebbd0 !important; }
             .mwigm-shrine-table { min-width: 860px; }
             .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
             .mwigm-shrine-group > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
@@ -1881,8 +1875,6 @@ function startGuildMonitor(Core) {
         }
         const sortOptions = state.activeTab === "skills"
             ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
-            : state.activeTab === "trials"
-            ? `<option value="name">Trial or member</option><option value="gap">Needs review first</option>`
             : state.activeTab === "auras"
             ? `<option value="name">Member name</option><option value="aura">Aura type</option><option value="unsigned">Unsigned first</option>`
             : state.activeTab === "members"
@@ -1891,7 +1883,7 @@ function startGuildMonitor(Core) {
 
         return `
             <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
-            <select class="mwigm-select" data-control="sort" aria-label="Sort results">${withSelectedOption(sortOptions, state.sort)}</select>
+            ${state.activeTab === "trials" ? "" : `<select class="mwigm-select" data-control="sort" aria-label="Sort results">${withSelectedOption(sortOptions, state.sort)}</select>`}
             <button class="mwigm-command" type="button" data-action="snapshot" ${aggregate.coveredCount ? "" : "disabled"}>Snapshot</button>
             <button class="mwigm-command mwigm-command-primary" type="button" data-action="export" ${aggregate.coveredCount ? "" : "disabled"}>Export CSV</button>
         `;
@@ -2026,7 +2018,7 @@ function startGuildMonitor(Core) {
 
     function renderMemberTrialChoice(choice, rank, className) {
         const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
-        const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}. Individual fit; the optimized roster may differ.`;
+        const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}. Individual fit; guild roster and availability are not modeled.`;
         return `<span class="mwigm-chip ${className}" title="${escapeHtml(title)}">${rank} ${escapeHtml(choice.trialName)}</span>`;
     }
 
@@ -2056,37 +2048,6 @@ function startGuildMonitor(Core) {
             .filter((trial) => trial.name.toLocaleLowerCase().includes(query) || trial.signups.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)))
             .map((trial) => renderTrialRow(trial, true))
             .join("");
-        const matchesComparisonQuery = (entry) =>
-            entry.memberName.toLocaleLowerCase().includes(query) ||
-            entry.currentTrialName.toLocaleLowerCase().includes(query) ||
-            entry.recommendedTrialName.toLocaleLowerCase().includes(query);
-        let comparisons = analysis.memberComparisons.filter(matchesComparisonQuery);
-        if (state.sort === "gap") {
-            comparisons = [...comparisons].sort((left, right) => {
-                const rank = (entry) => entry.signupStatus === "different" ? 0 : ["combatOnly", "unsigned"].includes(entry.signupStatus) ? 1 : entry.signupStatus === "aligned" ? 3 : 2;
-                return rank(left) - rank(right) || left.memberName.localeCompare(right.memberName);
-            });
-        }
-        const recommendationRows = comparisons.map((entry) => {
-            const status = entry.signupStatus === "aligned" ? "Matches" : entry.signupStatus === "different" ? "Move trial" : entry.signupStatus === "combatOnly" ? "Add skilling" : entry.signupStatus === "unsigned" ? "No signup" : entry.signupStatus === "ineligible" ? "No eligible skill" : "Profile needed";
-            const statusClass = entry.signupStatus === "aligned" ? "mwigm-chip-good" : ["different", "combatOnly"].includes(entry.signupStatus) ? "mwigm-chip-warn" : entry.signupStatus === "unsigned" ? "mwigm-chip-alert" : "";
-            const nameClass = entry.signupStatus === "aligned" ? "mwigm-target-aligned" : ["different", "combatOnly"].includes(entry.signupStatus) ? "mwigm-target-different" : entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-unassessed";
-            return `
-                <tr>
-                    <td><span class="mwigm-target-member ${nameClass}">${escapeHtml(entry.memberName)}</span><br><span class="mwigm-subtext">${escapeHtml(entry.reason)}</span></td>
-                    <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? ` <span class="mwigm-subtext">Lv ${entry.currentLevel}</span>` : ""}</td>
-                    <td>${escapeHtml(entry.recommendedTrialName)}${Number.isFinite(entry.recommendedLevel) ? ` <span class="mwigm-subtext">Lv ${entry.recommendedLevel}</span>` : ""}</td>
-                    <td><span class="mwigm-chip ${statusClass}">${status}</span></td>
-                </tr>
-            `;
-        }).join("");
-        const missingSignupRows = analysis.missingRecommendedSignup.filter(matchesComparisonQuery).map((entry) => `
-            <tr><td><span class="mwigm-target-member ${entry.signupStatus === "unsigned" ? "mwigm-target-unsigned" : "mwigm-target-different"}">${escapeHtml(entry.memberName)}</span></td><td>${entry.signupStatus === "combatOnly" ? "Combat only" : "No trial signup"}</td><td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel}</span></td></tr>
-        `).join("");
-        const wrongSignupRows = analysis.wrongRecommendedSignup.filter(matchesComparisonQuery).map((entry) => `
-            <tr><td><span class="mwigm-target-member mwigm-target-different">${escapeHtml(entry.memberName)}</span></td><td>${escapeHtml(entry.currentTrialName)}</td><td>${escapeHtml(entry.recommendedTrialName)} <span class="mwigm-subtext">Lv ${entry.recommendedLevel}</span></td></tr>
-        `).join("");
-
         return `
             ${overview}
             ${unsignedNotice}
@@ -2095,12 +2056,6 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
-            <div class="mwigm-section-title">Missing recommended skilling signup <span>${analysis.missingRecommendedSignup.length} members</span></div>
-            <table class="mwigm-table"><thead><tr><th>Member</th><th>Current</th><th>Recommended</th></tr></thead><tbody>${missingSignupRows || emptyTableRow(3)}</tbody></table>
-            <div class="mwigm-section-title">Signed for a different skilling trial <span>${analysis.wrongRecommendedSignup.length} members</span></div>
-            <table class="mwigm-table"><thead><tr><th>Member</th><th>Signed</th><th>Recommended</th></tr></thead><tbody>${wrongSignupRows || emptyTableRow(3)}</tbody></table>
-            <div class="mwigm-section-title">Member-by-member comparison <span>Actual signup versus calculated position</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Member</th><th>Actual skilling</th><th>Recommended</th><th>Status</th></tr></thead><tbody>${recommendationRows || emptyTableRow(4)}</tbody></table>
         `;
     }
 

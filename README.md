@@ -22,7 +22,6 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 - Manual desired-aura assignments for guild members
 - Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
 - Aura-player tracking for unsigned and incorrectly grouped designated players
-- Balanced skilling-trial recommendations and signup-gap lists based on captured member levels
 - First and second weekly trial choices ranked by each member's level relative to the captured guild median
 - Cheapest market-priced material conversion for every guild credit type
 - Incremental and cumulative coin estimates for every guild shrine level
@@ -39,7 +38,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.4`.
+The monitor header displays its running version. The current release is `v0.9.5`.
 
 ## Collecting member skill data
 
@@ -64,6 +63,8 @@ Select **Snapshot** to save the current aggregate locally. The `Change` column c
 
 The **Members** tab places each captured member's first and second median-fit trial choices beside their name. It also flags a player after a known offline duration reaches 72 hours. A hidden online status or unavailable timestamp is shown separately and is never treated as a 3-day absence.
 
+The first and second choices use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
+
 ## Guild trials
 
 The **Trials** tab reads the current weekly trial set and the signup information already sent to the game. It shows:
@@ -73,23 +74,13 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial
-- Actual skilling signup rosters and member-by-member recommendations when captured levels qualify
+- Actual skilling signup rosters
 
-The recommendation engine considers every guild member with at least one eligible captured level for the current skilling trials, including members who did not sign up. It respects guild minimum levels and keeps target roster sizes within one member when possible. It tests every feasible balanced size pattern and maximizes the sum of the four trial averages of captured skill levels. If minimum levels make balanced rosters infeasible, it uses an eligibility-constrained fallback. The member-by-member comparison lists everyone, with their actual signup, calculated position, and status. Members without enough captured level data show **Unknown**, not a copied signup or invented recommendation. **Different signup** means the current choice differs from this level-based target; it does not mean that choice is necessarily wrong.
-
-The Trials tab displays actual signup rosters and signup-time levels when available. Players without captured profiles cannot be assessed; check **Missing profiles** before acting on recommendations. The recommendation engine does not enforce signup slot caps or model equipment, buffs, and availability.
-
-Below the actual trial tables, **Missing recommended skilling signup** lists eligible members with no skilling signup, including combat-only members. **Signed for a different skilling trial** separately lists members whose actual skilling signup differs from their calculated assignment. These lists use captured profiles only; unknown members are not treated as mismatches.
+The Trials tab displays actual signup rosters and signup-time levels when available.
 
 The Trials signup tables show current slots and remaining capacity. Capacity follows the game's base of 20 skilling or 40 combat slots per trial plus the relevant Encampment building bonus. If the client has not supplied the building's per-level bonus definition, capacity is shown as unknown rather than guessed.
 
 The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
-
-Names in the member comparison are green when already signed for the recommended trial, yellow when signed for another skilling trial or combat only, and red when signed for neither trial category. Gray means no position can be calculated yet. Each name has a matching dot.
-
-If the Trials tab reports zero captured profiles, the signup-gap lists are empty and the member comparison shows Unknown rather than inventing recommendations. Open member profiles in the game while the script is enabled; the **Missing profiles** tab lists who still needs to be viewed.
-
-The first and second choices beside each name use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
