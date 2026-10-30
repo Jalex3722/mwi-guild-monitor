@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.17
+// @version      0.9.18
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1429,7 +1429,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.17";
+    const SCRIPT_VERSION = "0.9.18";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1461,6 +1461,7 @@ function startGuildMonitor(Core) {
         activeTab: "skills",
         query: "",
         sort: "game",
+        locateNotice: "",
         lastMessageAt: null,
         renderQueued: false,
         trialRevision: 0,
@@ -1898,6 +1899,9 @@ function startGuildMonitor(Core) {
             .mwigm-command:hover { background: #263a5d; }
             .mwigm-command-primary { border-color: #4c9b82; background: #17634f; }
             .mwigm-command-primary:hover { background: #1d775f; }
+            .mwigm-locate-button { height: 26px; padding: 3px 8px; font-size: 11px; }
+            .mwigm-missing-member-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+            .mwigm-native-target { outline: 3px solid #68d5a9 !important; outline-offset: 2px !important; box-shadow: 0 0 0 5px rgba(25, 87, 66, .35) !important; scroll-margin-block: 80px; }
             .mwigm-content { min-height: 0; flex: 1; overflow: auto; }
             .mwigm-table { width: 100%; min-width: 680px; border-collapse: collapse; table-layout: fixed; }
             .mwigm-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: #1c293b; color: #c4d0df; font-weight: 600; text-align: right; border-bottom: 1px solid #52637c; white-space: normal; }
@@ -2666,7 +2670,7 @@ function startGuildMonitor(Core) {
             const viewedDate = viewedAt === null ? "" : `<span class="mwigm-subtext mwigm-roster-names">${escapeHtml(new Date(viewedAt).toLocaleString())}</span>`;
             const needed = needsProfile(member);
             return `<tr>
-                <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(Core.prettifyHrid(member.role))}</span></td>
+                <td><span class="mwigm-missing-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span><button class="mwigm-command mwigm-locate-button" type="button" data-action="locate-member" data-member-id="${escapeHtml(member.id)}" title="Find this member in the game's open Guild Members list">Find</button></span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(Core.prettifyHrid(member.role))}</span></td>
                 <td>${escapeHtml(lastViewed)}${viewedDate}</td>
                 <td><span class="mwigm-chip ${needed ? "mwigm-chip-warn" : "mwigm-chip-good"}">${needed ? "Needed" : "Captured"}</span></td>
             </tr>`;
@@ -2674,9 +2678,80 @@ function startGuildMonitor(Core) {
         const neededCount = aggregate.memberCount - aggregate.coveredCount;
         return `
             <div class="mwigm-status">${metric("Needs profile", neededCount)}${metric("Captured", `${aggregate.coveredCount}/${aggregate.memberCount}`)}</div>
+            ${state.locateNotice ? `<div class="mwigm-notice">${escapeHtml(state.locateNotice)}</div>` : ""}
             ${neededCount ? `<div class="mwigm-notice mwigm-notice-info">Open missing profiles from the game's Guild panel. Last viewed records when this browser captured each profile.</div>` : ""}
             <table class="mwigm-table"><thead><tr><th style="width:45%">Member</th><th>Last viewed</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
         `;
+    }
+
+    let highlightedNativeMember = null;
+    let highlightTimer = null;
+
+    function findNativeMember(name) {
+        const wanted = Core.normalizeName(name);
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let bestScore = -Infinity;
+        const bestTargets = new Set();
+        let textNode;
+        while ((textNode = walker.nextNode())) {
+            if (Core.normalizeName(textNode.textContent) !== wanted) continue;
+            const element = textNode.parentElement;
+            if (!element || element.closest(`#${SCRIPT_ID}-panel, #${SCRIPT_ID}-button`) || !element.getClientRects().length) continue;
+            if (element.checkVisibility && !element.checkVisibility({ checkVisibilityCSS: true })) continue;
+
+            let score = 0;
+            let row = null;
+            let clickable = null;
+            let unrelatedView = false;
+            for (let ancestor = element, depth = 0; ancestor && ancestor !== document.body && depth < 6; ancestor = ancestor.parentElement, depth += 1) {
+                const marker = `${ancestor.id || ""} ${typeof ancestor.className === "string" ? ancestor.className : ""}`.toLocaleLowerCase();
+                if (marker.includes("chat") || marker.includes("leaderboard")) {
+                    unrelatedView = true;
+                    break;
+                }
+                if (marker.includes("guild")) score += 3;
+                if (marker.includes("member") || marker.includes("roster")) score += 2;
+                if (!row && (ancestor.matches("tr, li, [role='row']") || /(?:^|[_ -])(member|row)(?:$|[_ -])/.test(marker))) row = ancestor;
+                if (!clickable && ancestor.matches("button, a, [role='button']")) clickable = ancestor;
+            }
+            if (unrelatedView) continue;
+            if (row) score += 1;
+            if (clickable) score += 1;
+            if (score < 2) continue;
+            const target = row && row.textContent.length < 500 ? row : clickable || element;
+            if (score > bestScore) {
+                bestScore = score;
+                bestTargets.clear();
+                bestTargets.add(target);
+            } else if (score === bestScore) {
+                bestTargets.add(target);
+            }
+        }
+        return bestTargets.size === 1 ? bestTargets.values().next().value : null;
+    }
+
+    function locateMember(memberId) {
+        const member = currentAggregate().members.find((entry) => String(entry.id) === String(memberId));
+        if (!member) return;
+        const target = findNativeMember(member.name);
+        if (!target) {
+            state.locateNotice = `Could not find ${member.name} in the game view. Open Guild > Members, then try Find again.`;
+            render();
+            return;
+        }
+        state.locateNotice = "";
+        state.isOpen = false;
+        render();
+        if (highlightTimer) clearTimeout(highlightTimer);
+        if (highlightedNativeMember) highlightedNativeMember.classList.remove("mwigm-native-target");
+        highlightedNativeMember = target;
+        target.classList.add("mwigm-native-target");
+        target.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+        highlightTimer = setTimeout(() => {
+            target.classList.remove("mwigm-native-target");
+            if (highlightedNativeMember === target) highlightedNativeMember = null;
+            highlightTimer = null;
+        }, 10_000);
     }
 
     function coverageNotice(aggregate) {
@@ -2747,6 +2822,7 @@ function startGuildMonitor(Core) {
         if (control.dataset.tab) {
             state.activeTab = control.dataset.tab;
             state.query = "";
+            state.locateNotice = "";
             state.sort = state.activeTab === "missing" ? "freshness" : state.activeTab === "skills" ? "game" : "name";
             if (state.activeTab === "shrines") {
                 hydrateEconomyDefinitions();
@@ -2758,6 +2834,9 @@ function startGuildMonitor(Core) {
         }
 
         switch (control.dataset.action) {
+            case "locate-member":
+                locateMember(control.dataset.memberId);
+                break;
             case "close":
                 state.isOpen = false;
                 render();
