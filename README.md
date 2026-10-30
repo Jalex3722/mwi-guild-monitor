@@ -41,7 +41,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.8`.
+The monitor header displays its running version. The current release is `v0.9.9`.
 
 ## Collecting member skill data
 
@@ -83,7 +83,7 @@ The **Trials** tab reads the current weekly trial set and the signup information
 
 The Trials tab displays actual signup rosters and signup-time levels when available.
 
-The Trials signup tables show current slots and remaining capacity. Capacity follows the game's base of 20 skilling or 40 combat slots per trial plus the relevant Encampment building bonus. If the client has not supplied the building's per-level bonus definition, capacity is shown as unknown rather than guessed.
+The Trials signup tables show current slots and remaining capacity. Each skilling trial has `20 + 2 × Skilling Encampment level` slots; each combat trial has `40 + 4 × Combat Encampment level` slots. Capacity is shown as unknown until the client supplies guild building levels.
 
 The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
 

@@ -192,15 +192,20 @@ test("calculates trial capacity from encampment levels", () => {
         "/guild_buildings/skilling_encampment": 3,
         "/guild_buildings/combat_encampment": 2,
     };
-    const details = {
-        "/guild_buildings/skilling_encampment": { maxLevel: 2, skillingTrialSlotsPerLevel: 4 },
-        "/guild_buildings/combat_encampment": { maxLevel: 5, combatTrialSlotsPerLevel: 3 },
-    };
-    assert.equal(Core.getTrialCapacity("skilling", levels, details), 28);
-    assert.equal(Core.getTrialCapacity("combat", levels, details), 46);
-    assert.equal(Core.getTrialCapacity("skilling", {}, {}), 20);
-    assert.equal(Core.getTrialCapacity("skilling", null, details), null);
-    assert.equal(Core.getTrialCapacity("combat", levels, {}), null);
+    assert.equal(Core.getTrialCapacity("skilling", levels), 26);
+    assert.equal(Core.getTrialCapacity("combat", levels), 48);
+    assert.equal(Core.getTrialCapacity("skilling", {}), 20);
+    assert.equal(Core.getTrialCapacity("combat", {}), 40);
+    assert.equal(Core.getTrialCapacity("skilling", null), null);
+    assert.equal(Core.getTrialCapacity("combat", null), null);
+
+    const analysis = Core.analyzeTrials({
+        aggregate: Core.aggregateGuild([], {}),
+        weeklyTrialSet: { skillHrids: ["/trials/skilling"], combatHrids: ["/trials/combat"] },
+        buildingLevels: levels,
+    });
+    assert.equal(analysis.skilling[0].capacity, 26);
+    assert.equal(analysis.combat[0].capacity, 48);
 });
 
 test("records observed trial results without losing signup history", () => {

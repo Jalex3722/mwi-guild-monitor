@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.8
+// @version      0.9.9
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -712,18 +712,13 @@
         return assignment && typeof assignment.auraHrid === "string" ? assignment.auraHrid : "";
     }
 
-    function getTrialCapacity(kind, buildingLevels = {}, buildingDetails = {}) {
+    function getTrialCapacity(kind, buildingLevels = {}) {
         if (buildingLevels === null) return null;
         const isCombat = kind === "combat";
         const base = isCombat ? 40 : 20;
         const hrid = isCombat ? "/guild_buildings/combat_encampment" : "/guild_buildings/skilling_encampment";
-        const level = Number(asObject(buildingLevels)[hrid]) || 0;
-        if (level <= 0) return base;
-        const detail = asObject(buildingDetails)[hrid];
-        const perLevel = Number(detail && detail[isCombat ? "combatTrialSlotsPerLevel" : "skillingTrialSlotsPerLevel"]);
-        if (!Number.isFinite(perLevel) || perLevel <= 0) return null;
-        const maxLevel = Number(detail.maxLevel);
-        return base + Math.min(level, Number.isFinite(maxLevel) && maxLevel > 0 ? maxLevel : level) * perLevel;
+        const level = Math.max(0, Math.floor(Number(asObject(buildingLevels)[hrid]) || 0));
+        return base + level * (isCombat ? 4 : 2);
     }
 
     function strongestSkill(member, skillDetails = {}) {
@@ -745,7 +740,6 @@
         skillDetails = {},
         auraAssignments = {},
         buildingLevels = {},
-        buildingDetails = {},
         now = Date.now(),
     }) {
         const skillingHrids = Array.isArray(weeklyTrialSet.skillHrids) ? weeklyTrialSet.skillHrids : [];
@@ -806,7 +800,7 @@
                 name: getTrialName(trialHrid, trialDetails, skillDetails),
                 skillHrid: detail.skillHrid || "",
                 minLevel: Number(minimums[trialHrid]) || 0,
-                capacity: getTrialCapacity(kind, buildingLevels, buildingDetails),
+                capacity: getTrialCapacity(kind, buildingLevels),
                 signups,
                 signupCount: signups.length,
                 averageLevel: knownLevels.length ? knownLevels.reduce((sum, level) => sum + level, 0) / knownLevels.length : null,
@@ -1257,7 +1251,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.8";
+    const SCRIPT_VERSION = "0.9.9";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1269,7 +1263,6 @@ function startGuildMonitor(Core) {
         guildTrialSignupLevelMap: {},
         guildWeeklyTrialSet: { skillHrids: [], combatHrids: [] },
         guildTrialDetails: {},
-        guildBuildingDetails: {},
         guildBuildingLevels: null,
         skillDetails: {},
         itemDetails: {},
@@ -1521,7 +1514,6 @@ function startGuildMonitor(Core) {
             case "init_client_data":
                 state.skillDetails = message.skillDetailMap || message.skillDetailDict || state.skillDetails;
                 state.guildTrialDetails = message.guildTrialDetailMap || state.guildTrialDetails;
-                state.guildBuildingDetails = message.guildBuildingDetailMap || state.guildBuildingDetails;
                 applyEconomyDefinitions(message);
                 void refreshMarketData();
                 break;
@@ -1858,7 +1850,6 @@ function startGuildMonitor(Core) {
             skillDetails: state.skillDetails,
             auraAssignments: state.guildStore ? state.guildStore.auraAssignments : {},
             buildingLevels: state.guildBuildingLevels,
-            buildingDetails: state.guildBuildingDetails,
         });
         state.trialAnalysisCache = { revision: state.trialRevision, weekStart, result };
         return result;
