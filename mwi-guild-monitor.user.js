@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.11
+// @version      0.9.12
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -513,6 +513,9 @@
         const visited = new Set();
         let itemDetails = {};
         let guildBuffDetails = {};
+        let guildBuildingDetails = {};
+        let guildShrineDetails = {};
+        let leaderboardTypeDetails = {};
 
         while (pending.length && visited.size < 24) {
             const raw = pending.shift();
@@ -525,12 +528,21 @@
             const buffs = Object.keys(buffMap).length ? buffMap : asObject(value.guildBuffDetailDict);
             if (Object.keys(items).length) itemDetails = items;
             if (Object.keys(buffs).length) guildBuffDetails = buffs;
+            const buildingMap = asObject(value.guildBuildingDetailMap);
+            const shrineMap = asObject(value.guildShrineDetailMap);
+            const typeMap = asObject(value.leaderboardTypeDetailMap);
+            const buildings = Object.keys(buildingMap).length ? buildingMap : asObject(value.guildBuildingDetailDict);
+            const shrines = Object.keys(shrineMap).length ? shrineMap : asObject(value.guildShrineDetailDict);
+            const types = Object.keys(typeMap).length ? typeMap : asObject(value.leaderboardTypeDetailDict);
+            if (Object.keys(buildings).length) guildBuildingDetails = buildings;
+            if (Object.keys(shrines).length) guildShrineDetails = shrines;
+            if (Object.keys(types).length) leaderboardTypeDetails = types;
             ["data", "payload", "message", "initClientData", "clientData", "gameData"].forEach((key) => {
                 if (value[key]) pending.push(value[key]);
             });
         }
 
-        return { itemDetails, guildBuffDetails };
+        return { itemDetails, guildBuffDetails, guildBuildingDetails, guildShrineDetails, leaderboardTypeDetails };
     }
 
     function analyzeGuildEconomy({
@@ -730,6 +742,104 @@
         const hrid = isCombat ? "/guild_buildings/combat_encampment" : "/guild_buildings/skilling_encampment";
         const level = Math.max(0, Math.floor(Number(asObject(buildingLevels)[hrid]) || 0));
         return base + level * (isCombat ? 4 : 2);
+    }
+
+    function analyzeGuildStructures(guild, buildingLevels, buildingDetails = {}, shrineDetails = {}) {
+        const points = Number(guild && guild.guildPoints);
+        const availablePoints = guild && guild.guildPoints !== null && guild.guildPoints !== undefined && Number.isFinite(points) ? Math.floor(points) : null;
+        const levels = asObject(buildingLevels);
+        const makeRows = (details, kind, prefix) => [...new Set([...Object.keys(asObject(details)), ...Object.keys(levels).filter((hrid) => hrid.startsWith(prefix))])]
+            .map((hrid) => {
+                const detail = asObject(asObject(details)[hrid]);
+                const rawLevel = Number(levels[hrid]);
+                const currentLevel = buildingLevels === null ? null : Number.isFinite(rawLevel) ? Math.max(0, Math.floor(rawLevel)) : 0;
+                const costs = detail.guildPointCosts && typeof detail.guildPointCosts === "object" ? detail.guildPointCosts : {};
+                const levelCosts = Object.entries(costs).filter(([, value]) => value !== null && value !== undefined && value !== "")
+                    .map(([key, value]) => ({ level: Number(key), cost: Number(value) }))
+                    .filter((entry) => Number.isSafeInteger(entry.level) && entry.level > 0 && Number.isFinite(entry.cost) && entry.cost >= 0)
+                    .sort((left, right) => left.level - right.level);
+                const listedMax = levelCosts.length ? levelCosts[levelCosts.length - 1].level : 0;
+                const configuredMax = Number(detail.maxLevel);
+                const maxLevel = Number.isSafeInteger(configuredMax) && configuredMax > 0 ? configuredMax : listedMax || null;
+                const maxed = currentLevel !== null && maxLevel !== null && currentLevel >= maxLevel;
+                const nextLevel = currentLevel === null || maxed ? null : currentLevel + 1;
+                const nextCost = nextLevel === null ? null : levelCosts.find((entry) => entry.level === nextLevel)?.cost ?? null;
+                const futureCosts = currentLevel === null || maxLevel === null ? [] : Array.from({ length: Math.max(0, maxLevel - currentLevel) }, (_, index) => levelCosts.find((entry) => entry.level === currentLevel + index + 1)?.cost);
+                return {
+                    hrid,
+                    kind,
+                    name: detail.name || detail.displayName || (kind === "shrine" ? `Shrine of ${prettifyHrid(hrid)}` : prettifyHrid(hrid)),
+                    sortIndex: Number(detail.sortIndex) || 0,
+                    currentLevel,
+                    maxLevel,
+                    nextLevel,
+                    nextCost,
+                    shortfall: nextCost === null || availablePoints === null ? null : Math.max(0, nextCost - availablePoints),
+                    remainingCost: maxed ? 0 : futureCosts.length && futureCosts.every(Number.isFinite) ? futureCosts.reduce((sum, cost) => sum + cost, 0) : null,
+                    levelCosts,
+                    maxed,
+                };
+            }).sort((left, right) => left.sortIndex - right.sortIndex || left.name.localeCompare(right.name));
+        return {
+            availablePoints,
+            lifetimePoints: guild && guild.lifetimeGuildPoints !== null && guild.lifetimeGuildPoints !== undefined && Number.isFinite(Number(guild.lifetimeGuildPoints)) ? Math.floor(Number(guild.lifetimeGuildPoints)) : null,
+            buildings: makeRows(buildingDetails, "building", "/guild_buildings/"),
+            shrines: makeRows(shrineDetails, "shrine", "/guild_shrines/"),
+        };
+    }
+
+    function recordGuildPointsHistory(history, guild, observedAt = Date.now()) {
+        const previous = Array.isArray(history) ? history : [];
+        if (!guild) return previous;
+        const available = guild.guildPoints === null || guild.guildPoints === undefined ? null : Number(guild.guildPoints);
+        const lifetime = guild.lifetimeGuildPoints === null || guild.lifetimeGuildPoints === undefined ? null : Number(guild.lifetimeGuildPoints);
+        if (!Number.isFinite(available) && !Number.isFinite(lifetime)) return previous;
+        const current = { available: Number.isFinite(available) ? Math.floor(available) : null, lifetime: Number.isFinite(lifetime) ? Math.floor(lifetime) : null, observedAt };
+        const latest = previous[previous.length - 1];
+        return latest && latest.available === current.available && latest.lifetime === current.lifetime ? previous : [...previous, current].slice(-60);
+    }
+
+    function recordLeaderboardObservation(observations, message, guild, roster = [], typeDetails = {}, observedAt = Date.now()) {
+        const previous = asObject(observations);
+        const leaderboard = asObject(message && message.leaderboard);
+        const type = String(message && message.leaderboardType || "");
+        const category = String(message && message.leaderboardCategory || "");
+        if (!guild || !type || !category || !Array.isArray(leaderboard.rows)) return previous;
+        const isGuild = type === "guild" || Boolean(asObject(typeDetails)[type]?.isGuild);
+        const isSkill = Object.prototype.hasOwnProperty.call(SKILL_EMOJIS, `/skills/${category}`) && category !== "combat";
+        if (!isGuild && !isSkill) return previous;
+        const filter = [message.guildTypeFilter || "all", message.gameModeFilter || "all", message.trialFilter || "all"].map(String).join(":");
+        const key = `${type}:${category}:${filter}`;
+        const revision = Number(message.leaderboardRevision) || 0;
+        if (Number(previous[key]?.revision) > revision) return previous;
+        const rows = [...leaderboard.rows, message.personalRow].filter((row) => row && typeof row === "object");
+        const rankOf = (row) => {
+            const rank = Number(row.rank);
+            return Number.isSafeInteger(rank) && rank > 0 ? rank : null;
+        };
+        const sameIdentity = (row, person) => (row.id !== null && row.id !== undefined && person.id !== null && person.id !== undefined && String(row.id) === String(person.id)) ||
+            Boolean(row.name && person.name && normalizeName(row.name) === normalizeName(person.name));
+        const matches = isGuild ? [] : roster.flatMap((member) => {
+            const row = rows.find((entry) => sameIdentity(entry, member) && rankOf(entry) !== null && rankOf(entry) <= 100);
+            return row ? [{ id: String(member.id), name: member.name, rank: rankOf(row) }] : [];
+        });
+        const guildRow = isGuild ? rows.find((row) => sameIdentity(row, guild) && rankOf(row) !== null) : null;
+        const next = { ...previous, [key]: { type, category, filter, isGuild, guildRank: guildRow ? rankOf(guildRow) : null, members: matches, revision, observedAt } };
+        return Object.fromEntries(Object.entries(next).sort((left, right) => left[1].observedAt - right[1].observedAt).slice(-100));
+    }
+
+    function getMemberLeaderboardSpots(observations, member) {
+        if (!member) return [];
+        return Object.values(asObject(observations)).flatMap((board) => {
+            if (!board || board.isGuild) return [];
+            const match = (Array.isArray(board.members) ? board.members : []).find((entry) => String(entry.id) === String(member.id) || normalizeName(entry.name) === normalizeName(member.name));
+            return match ? [{ category: board.category, type: board.type, filter: board.filter, rank: match.rank, observedAt: board.observedAt }] : [];
+        }).sort((left, right) => left.rank - right.rank || left.category.localeCompare(right.category));
+    }
+
+    function getGuildLeaderboardSpots(observations) {
+        return Object.values(asObject(observations)).filter((board) => board && board.isGuild && Number.isSafeInteger(board.guildRank) && board.guildRank > 0)
+            .sort((left, right) => left.category.localeCompare(right.category) || String(left.filter).localeCompare(String(right.filter)));
     }
 
     function strongestSkill(member, skillDetails = {}) {
@@ -1222,6 +1332,7 @@
         TOTAL_LEVEL_THRESHOLDS,
         aggregateGuild,
         analyzeGuildEconomy,
+        analyzeGuildStructures,
         analyzeTrials,
         asObject,
         buildMemberTracking,
@@ -1232,6 +1343,8 @@
         getAuraAssignment,
         getEffectiveAuraAssignment,
         getAuraDefinition,
+        getGuildLeaderboardSpots,
+        getMemberLeaderboardSpots,
         getSpecialAbilityDefinition,
         getItemName,
         getMarketQuote,
@@ -1251,6 +1364,8 @@
         prettifyHrid,
         recordWeeklyTrialParticipation,
         recordWeeklyTrialResults,
+        recordGuildPointsHistory,
+        recordLeaderboardObservation,
         resolveGuildWeekStart,
         extractGuildBuffLevels,
         extractEconomyDefinitions,
@@ -1264,7 +1379,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.11";
+    const SCRIPT_VERSION = "0.9.12";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1277,6 +1392,9 @@ function startGuildMonitor(Core) {
         guildWeeklyTrialSet: { skillHrids: [], combatHrids: [] },
         guildTrialDetails: {},
         guildBuildingLevels: null,
+        guildBuildingDetails: {},
+        guildShrineDetails: {},
+        leaderboardTypeDetails: {},
         skillDetails: {},
         itemDetails: {},
         guildBuffDetails: {},
@@ -1298,6 +1416,7 @@ function startGuildMonitor(Core) {
         trialRevision: 0,
         trialAnalysisCache: null,
         expandedShrines: new Set(),
+        expandedBuildingCosts: new Set(),
     };
 
     function defaultStore() {
@@ -1363,11 +1482,18 @@ function startGuildMonitor(Core) {
         if (Object.keys(definitions.guildBuffDetails).length && (!onlyMissing || !Object.keys(state.guildBuffDetails).length)) {
             state.guildBuffDetails = definitions.guildBuffDetails;
         }
-        return Object.keys(definitions.itemDetails).length > 0 || Object.keys(definitions.guildBuffDetails).length > 0;
+        for (const [key, value] of [
+            ["guildBuildingDetails", definitions.guildBuildingDetails],
+            ["guildShrineDetails", definitions.guildShrineDetails],
+            ["leaderboardTypeDetails", definitions.leaderboardTypeDetails],
+        ]) {
+            if (Object.keys(value).length && (!onlyMissing || !Object.keys(state[key]).length)) state[key] = value;
+        }
+        return Object.values(definitions).some((value) => Object.keys(value).length > 0);
     }
 
     function hydrateEconomyDefinitions() {
-        if (Object.keys(state.itemDetails).length && Object.keys(state.guildBuffDetails).length) return;
+        if ([state.itemDetails, state.guildBuffDetails, state.guildBuildingDetails, state.guildShrineDetails, state.leaderboardTypeDetails].every((value) => Object.keys(value).length)) return;
         try {
             const cached = pageWindow.localStorageUtil && pageWindow.localStorageUtil.getInitClientData?.();
             if (cached) applyEconomyDefinitions(cached, true);
@@ -1434,6 +1560,8 @@ function startGuildMonitor(Core) {
             auraAssignments: previous.auraAssignments || {},
             trialHistory: previous.trialHistory || {},
             trialPlans: previous.trialPlans || {},
+            guildPointsHistory: Array.isArray(previous.guildPointsHistory) ? previous.guildPointsHistory : [],
+            leaderboards: previous.leaderboards || {},
         };
         state.guildStore = store.guilds[key];
         return { store, key };
@@ -1460,6 +1588,29 @@ function startGuildMonitor(Core) {
             weekStart,
             observedAt,
         );
+        writeStore(store);
+        state.guildStore = store.guilds[key];
+    }
+
+    function captureGuildPoints(observedAt = Date.now()) {
+        if (!state.guild) return;
+        const { store, key } = ensureGuildStore();
+        const previous = store.guilds[key].guildPointsHistory;
+        const next = Core.recordGuildPointsHistory(previous, state.guild, observedAt);
+        if (next === previous) return;
+        store.guilds[key].guildPointsHistory = next;
+        writeStore(store);
+        state.guildStore = store.guilds[key];
+    }
+
+    function captureLeaderboard(message, observedAt = Date.now()) {
+        if (!state.guild) return;
+        const { store, key } = ensureGuildStore();
+        const roster = Core.normalizeRoster(state.guildCharacterMap, state.guildSharableCharacterMap);
+        const previous = store.guilds[key].leaderboards;
+        const next = Core.recordLeaderboardObservation(previous, message, state.guild, roster, state.leaderboardTypeDetails, observedAt);
+        if (next === previous) return;
+        store.guilds[key].leaderboards = next;
         writeStore(store);
         state.guildStore = store.guilds[key];
     }
@@ -1557,6 +1708,9 @@ function startGuildMonitor(Core) {
                 state.guildBuffLevels = Core.extractGuildBuffLevels(message, state.guildBuffLevels);
                 if (state.guild) ensureGuildStore();
                 break;
+            case "leaderboard_updated":
+                captureLeaderboard(message);
+                break;
             case "guild_characters_updated":
                 state.guildCharacterMap = message.guildCharacterMap || {};
                 state.guildSharableCharacterMap = message.guildSharableCharacterMap || {};
@@ -1604,6 +1758,7 @@ function startGuildMonitor(Core) {
         if (["init_character_data", "guild_updated", "guild_characters_updated", "guild_trial_signup_updated"].includes(message.type)) {
             captureTrialParticipation();
         }
+        if (message.type === "init_character_data" || message.type === "guild_updated") captureGuildPoints();
 
         if (message.type !== "market_item_values_updated" && message.type !== "guild_buffs_updated") {
             state.trialRevision += 1;
@@ -1703,6 +1858,11 @@ function startGuildMonitor(Core) {
             .mwigm-table tbody tr:nth-child(even) { background: #141f2d; }
             .mwigm-table tbody tr:hover { background: #213044; }
             .mwigm-members-table { min-width: 820px; }
+            .mwigm-guild-table { min-width: 780px; }
+            .mwigm-building-costs { margin-top: 4px; color: #9eafc2; font-size: 11px; }
+            .mwigm-building-costs summary { cursor: pointer; width: max-content; color: #77d2b2; }
+            .mwigm-building-costs summary:focus-visible { outline: 2px solid #77d2b2; }
+            .mwigm-building-cost-list { display: block; margin: 5px 0 0 15px; line-height: 1.5; }
             .mwigm-skill-gap { color: #efbd70; }
             .mwigm-skill-list { border-top: 1px solid #31415c; }
             .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(58px, .5fr)) minmax(170px, 1.35fr) minmax(62px, .5fr); border-bottom: 1px solid #2b3a53; }
@@ -1828,6 +1988,7 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
                 <button class="mwigm-tab" type="button" data-tab="results">Results</button>
+                <button class="mwigm-tab" type="button" data-tab="guild">Guild</button>
                 <button class="mwigm-tab" type="button" data-tab="shrines">Shrines</button>
                 <button class="mwigm-tab" type="button" data-tab="missing">Missing profiles</button>
             </nav>
@@ -1931,7 +2092,7 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "guild" ? "Find a building or shrine" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
         if (state.activeTab === "results") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">`;
         }
@@ -1940,6 +2101,10 @@ function startGuildMonitor(Core) {
                 <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
                 <button class="mwigm-command mwigm-command-primary" type="button" data-action="refresh-market" title="Refresh official prices and reread game economy definitions" ${state.marketLoading ? "disabled" : ""}>${state.marketLoading ? "Refreshing" : "Refresh prices"}</button>
             `;
+        }
+        if (state.activeTab === "guild") {
+            return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
+                <select class="mwigm-select" data-control="sort" aria-label="Sort structures">${withSelectedOption('<option value="name">Name</option><option value="level">Highest level</option><option value="cost">Next cost</option>', state.sort)}</select>`;
         }
         const sortOptions = state.activeTab === "skills"
             ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
@@ -1963,6 +2128,7 @@ function startGuildMonitor(Core) {
         if (!state.guild) {
             return emptyState("No guild data yet", "Reload Milky Way Idle after enabling the userscript.");
         }
+        if (state.activeTab === "guild") return renderGuild();
         if (!aggregate.memberCount) {
             return emptyState("Waiting for the roster", "Open the Guild panel or reload the game.");
         }
@@ -2034,6 +2200,7 @@ function startGuildMonitor(Core) {
         const trackingById = new Map(tracking.map((entry) => [String(entry.memberId), entry]));
         const medianSuggestionById = new Map(currentTrialAnalysis(aggregate).medianSuggestions.map((entry) => [String(entry.memberId), entry]));
         const weekStart = Core.resolveGuildWeekStart(state.guild);
+        const leaderboards = state.guildStore ? state.guildStore.leaderboards : {};
         let members = aggregate.members.filter((member) => member.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase()));
         members = sortMembers(members, trackingById);
         const offlineCount = tracking.filter((entry) => entry.offlineThreeDays).length;
@@ -2074,9 +2241,13 @@ function startGuildMonitor(Core) {
             const trialChoices = trialSuggestion
                 ? `${renderMemberTrialChoice(trialSuggestion.first, "1st", "mwigm-chip-good")}${trialSuggestion.second ? renderMemberTrialChoice(trialSuggestion.second, "2nd", "") : ""}`
                 : "";
+            const topSpots = Core.getMemberLeaderboardSpots(leaderboards, member);
+            const leaderboardLine = topSpots.length
+                ? `<span class="mwigm-member-skills">Observed top 100: ${topSpots.map((spot) => `<span class="mwigm-chip mwigm-chip-good" title="${escapeHtml(`${Core.prettifyHrid(spot.type)} leaderboard · ${spot.filter} · seen ${new Date(spot.observedAt).toLocaleString()}`)}">${escapeHtml(Core.getSkillName(`/skills/${spot.category}`, state.skillDetails))} #${spot.rank}</span>`).join(" ")}</span>`
+                : "";
             return `
                 <tr>
-                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${special ? `<span class="mwigm-member-skills">Special: ${escapeHtml(special.name)}</span>` : ""}</td>
+                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${special ? `<span class="mwigm-member-skills">Special: ${escapeHtml(special.name)}</span>` : ""}${leaderboardLine}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
@@ -2092,6 +2263,60 @@ function startGuildMonitor(Core) {
         const difference = choice.medianDifference >= 0 ? `+${formatCompactDecimal(choice.medianDifference)}` : formatCompactDecimal(choice.medianDifference);
         const title = `${choice.trialName}: level ${formatCompactDecimal(choice.level)}, ${difference} vs guild median ${formatCompactDecimal(choice.guildMedian)}. Individual fit; guild roster and availability are not modeled.`;
         return `<span class="mwigm-chip ${className}" title="${escapeHtml(title)}">${rank} ${escapeHtml(choice.trialName)}</span>`;
+    }
+
+    function renderGuild() {
+        const structures = Core.analyzeGuildStructures(state.guild, state.guildBuildingLevels, state.guildBuildingDetails, state.guildShrineDetails);
+        const history = state.guildStore && Array.isArray(state.guildStore.guildPointsHistory) ? state.guildStore.guildPointsHistory : [];
+        const leaderboards = Core.getGuildLeaderboardSpots(state.guildStore ? state.guildStore.leaderboards : {});
+        const currentTrials = Core.parseJsonObject(state.guild.currentTrialsData);
+        const trialPoints = Object.values(Core.asObject(currentTrials.points)).map(Number).filter(Number.isFinite);
+        const weeklyPoints = trialPoints.length ? trialPoints.reduce((sum, value) => sum + value, 0) : null;
+        const leaderboardName = (category) => category === "guild" ? "Level" : Core.prettifyHrid(String(category).replace(/^guild_/, ""));
+        const rankRows = leaderboards.map((board) => {
+            const filters = String(board.filter || "").split(":").filter((value) => value && value !== "all").map(Core.prettifyHrid).join(" · ") || "All";
+            return `<tr><td>${escapeHtml(leaderboardName(board.category))}</td><td><strong>#${board.guildRank}</strong></td><td>${escapeHtml(filters)}</td><td class="mwigm-muted" title="${escapeHtml(new Date(board.observedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(board.observedAt))}</td></tr>`;
+        }).join("");
+        const historyRows = history.slice(-10).reverse().map((entry) => `<tr>
+            <td>${entry.available === null ? "--" : formatExactNumber(entry.available)}</td>
+            <td>${entry.lifetime === null ? "--" : formatExactNumber(entry.lifetime)}</td>
+            <td class="mwigm-muted">${escapeHtml(new Date(entry.observedAt).toLocaleString())}</td>
+        </tr>`).join("");
+        const query = state.query.toLocaleLowerCase();
+        const structureTable = (label, entries) => {
+            let rows = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(query));
+            if (state.sort === "level") rows = [...rows].sort((left, right) => (right.currentLevel ?? -1) - (left.currentLevel ?? -1) || left.name.localeCompare(right.name));
+            else if (state.sort === "cost") rows = [...rows].sort((left, right) => (left.nextCost ?? Infinity) - (right.nextCost ?? Infinity) || left.name.localeCompare(right.name));
+            else rows = [...rows].sort((left, right) => left.name.localeCompare(right.name));
+            const body = rows.map((entry) => {
+                const costs = entry.levelCosts.length ? `<details class="mwigm-building-costs" ${state.expandedBuildingCosts.has(entry.hrid) ? "open" : ""}>
+                    <summary data-action="toggle-building" data-building-hrid="${escapeHtml(entry.hrid)}">Level costs</summary>
+                    <span class="mwigm-building-cost-list">${entry.levelCosts.map((level) => `Lv ${level.level}: ${formatExactNumber(level.cost)} GP`).join("<br>")}</span>
+                </details>` : "";
+                const next = entry.maxed ? "Maxed" : entry.nextCost === null ? "--" : `${formatExactNumber(entry.nextCost)} GP`;
+                const gap = entry.maxed ? "--" : entry.shortfall === null ? "--" : entry.shortfall === 0 ? `<span class="mwigm-up">Affordable</span>` : `${formatExactNumber(entry.shortfall)} GP`;
+                return `<tr><td><span class="mwigm-member-name">${escapeHtml(entry.name)}</span>${costs}</td>
+                    <td>${entry.currentLevel === null ? "--" : entry.currentLevel}${entry.maxLevel === null ? "" : ` / ${entry.maxLevel}`}</td>
+                    <td>${next}</td><td>${gap}</td><td>${entry.remainingCost === null ? "--" : `${formatExactNumber(entry.remainingCost)} GP`}</td></tr>`;
+            }).join("");
+            return `<div class="mwigm-section-title">${escapeHtml(label)} <span>${entries.length} known</span></div>
+                <table class="mwigm-table mwigm-guild-table"><thead><tr><th style="width:30%">Structure</th><th>Level</th><th>Next upgrade</th><th>Points needed</th><th>To max</th></tr></thead><tbody>${body || emptyTableRow(5)}</tbody></table>`;
+        };
+        return `
+            <div class="mwigm-status">
+                ${metric("Available GP", structures.availablePoints === null ? "--" : formatNumber(structures.availablePoints))}
+                ${metric("Lifetime GP", structures.lifetimePoints === null ? "--" : formatNumber(structures.lifetimePoints))}
+                ${metric("This week's trials", weeklyPoints === null ? "--" : formatNumber(weeklyPoints))}
+                ${metric("Observed guild ranks", leaderboards.length)}
+            </div>
+            <div class="mwigm-section-title">Guild leaderboard <span>Last observed positions</span></div>
+            ${rankRows ? `<table class="mwigm-table"><thead><tr><th>Category</th><th>Rank</th><th>Filter</th><th>Seen</th></tr></thead><tbody>${rankRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">Open a Guilds leaderboard category in the game to capture its rank. The monitor does not request boards automatically.</div>`}
+            <div class="mwigm-section-title">Guild Points history <span>Changes observed in this browser</span></div>
+            ${historyRows ? `<table class="mwigm-table"><thead><tr><th>Available GP</th><th>Lifetime GP</th><th>Seen</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">No Guild Point totals have been observed yet.</div>`}
+            ${!Object.keys(state.guildBuildingDetails).length && !Object.keys(state.guildShrineDetails).length ? `<div class="mwigm-notice mwigm-notice-info">Building costs need the game's client definitions. Reload after enabling the script or open the Guild panel.</div>` : ""}
+            ${structureTable("Buildings", structures.buildings)}
+            ${structureTable("Shrines", structures.shrines)}
+        `;
     }
 
     function renderTrials(aggregate) {
@@ -2476,6 +2701,7 @@ function startGuildMonitor(Core) {
                 hydrateEconomyDefinitions();
                 void refreshMarketData();
             }
+            if (state.activeTab === "guild") hydrateEconomyDefinitions();
             render();
             return;
         }
@@ -2499,6 +2725,12 @@ function startGuildMonitor(Core) {
                 const group = control.dataset.shrineGroup;
                 if (control.parentElement.open) state.expandedShrines.delete(group);
                 else state.expandedShrines.add(group);
+                break;
+            }
+            case "toggle-building": {
+                const hrid = control.dataset.buildingHrid;
+                if (control.parentElement.open) state.expandedBuildingCosts.delete(hrid);
+                else state.expandedBuildingCosts.add(hrid);
                 break;
             }
         }

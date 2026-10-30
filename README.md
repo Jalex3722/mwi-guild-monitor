@@ -21,11 +21,14 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 - Previous-week signup tracking, with an unsigned status recorded only when neither trial category was joined
 - Per-trial signup levels, level ranges, minimum requirements, and member rosters
 - Combat role distribution for each combat trial
-- Manual special-ability assignments for guild members, including Insanity and Revive
+- Combat-level defaults and manual special-ability assignments, including Insanity and Revive
 - Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
 - Per-combat-trial Insanity and Revive counts with assigned player names
 - Member-level assignment status for designated special-ability users
 - First and second weekly trial choices ranked by each member's level relative to the captured guild median
+- Guild Point balances and local change history
+- Guild leaderboard positions and observed top-100 skill ranks beside members' names
+- Guild building and shrine levels, next-upgrade costs, shortfalls, and expandable level-cost schedules
 - Cheapest market-priced material conversion for every guild credit type
 - Incremental and cumulative coin estimates for every guild shrine level
 - CSV export for Excel or Google Sheets, including guild XP, offline duration, prior-week status, trial signups, and special-ability assignments
@@ -41,7 +44,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.11`.
+The monitor header displays its running version. The current release is `v0.9.12`.
 
 ## Collecting member skill data
 
@@ -90,6 +93,12 @@ The **Results** tab keeps a rolling 12-week local record of trial status, highes
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
 The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
+
+## Guild Points, buildings, and leaderboards
+
+The **Guild** tab shows available and lifetime Guild Points from the current guild state, this week's observed trial points, and the latest ten Guild Point balance changes captured by this browser. It lists all building and shrine levels known to the game client. Next-upgrade costs, affordability gaps, total cost to max level, and expandable per-level Guild Point costs use the game's building and shrine definitions. Unknown costs remain blank rather than estimated.
+
+Guild leaderboard positions and top-100 member skill positions are captured from `leaderboard_updated` messages when you open those categories in the game's Leaderboard panel. The monitor makes no leaderboard requests. Observations are cached locally per guild with a timestamp; revisit a category to refresh it. A missing member badge means the category has not been observed here or that the member was not in its top 100 at the last observation. It is not a live global ranking check.
 
 ## Special ability planning
 

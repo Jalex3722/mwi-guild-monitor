@@ -230,6 +230,74 @@ test("calculates trial capacity from encampment levels", () => {
     assert.equal(analysis.combat[0].capacity, 48);
 });
 
+test("tracks guild structure levels and Guild Point upgrade costs", () => {
+    const guild = { id: 42, name: "Cows", guildPoints: 120, lifetimeGuildPoints: 520 };
+    const levels = { "/guild_buildings/guild_hall": 1, "/guild_shrines/force": 2 };
+    const buildings = { "/guild_buildings/guild_hall": { maxLevel: 3, guildPointCosts: { 1: 100, 2: 200, 3: 300 }, sortIndex: 1 } };
+    const shrines = { "/guild_shrines/force": { maxLevel: 3, guildPointCosts: [null, 10, 20, 30] } };
+    const result = Core.analyzeGuildStructures(guild, levels, buildings, shrines);
+
+    assert.equal(result.availablePoints, 120);
+    assert.equal(result.lifetimePoints, 520);
+    assert.equal(result.buildings[0].currentLevel, 1);
+    assert.equal(result.buildings[0].nextCost, 200);
+    assert.equal(result.buildings[0].shortfall, 80);
+    assert.equal(result.buildings[0].remainingCost, 500);
+    assert.deepEqual(result.buildings[0].levelCosts.map((entry) => entry.cost), [100, 200, 300]);
+    assert.equal(result.shrines[0].nextCost, 30);
+    assert.equal(result.shrines[0].shortfall, 0);
+    const maxed = Core.analyzeGuildStructures(guild, { "/guild_buildings/guild_hall": 3 }, buildings).buildings[0];
+    assert.equal(maxed.remainingCost, 0);
+    assert.equal(maxed.maxed, true);
+    assert.equal(Core.analyzeGuildStructures(guild, null, buildings).buildings[0].nextCost, null);
+    const missingCost = Core.analyzeGuildStructures(guild, levels, { "/guild_buildings/guild_hall": { maxLevel: 2, guildPointCosts: { 2: null } } });
+    assert.equal(missingCost.buildings[0].nextCost, null);
+});
+
+test("records only changed Guild Point balances", () => {
+    const first = Core.recordGuildPointsHistory([], { guildPoints: 0, lifetimeGuildPoints: 400 }, 1);
+    const unchanged = Core.recordGuildPointsHistory(first, { guildPoints: 0, lifetimeGuildPoints: 400 }, 2);
+    const changed = Core.recordGuildPointsHistory(unchanged, { guildPoints: 20, lifetimeGuildPoints: 420 }, 3);
+    assert.equal(unchanged, first);
+    assert.deepEqual(changed, [
+        { available: 0, lifetime: 400, observedAt: 1 },
+        { available: 20, lifetime: 420, observedAt: 3 },
+    ]);
+});
+
+test("captures observed top-100 member ranks and clears outdated positions", () => {
+    const guild = { id: 42, name: "Cows" };
+    const members = [{ id: "1", name: "Ada" }, { id: "2", name: "Babbage" }];
+    const message = (revision, rows) => ({
+        leaderboardType: "standard", leaderboardCategory: "cooking", leaderboardRevision: revision,
+        leaderboard: { rows },
+    });
+    const first = Core.recordLeaderboardObservation({}, message(1, [
+        { id: 1, name: "Ada", rank: 7 }, { id: 2, name: "Babbage", rank: 101 },
+    ]), guild, members, {}, 1000);
+    assert.deepEqual(Core.getMemberLeaderboardSpots(first, members[0]).map((spot) => [spot.category, spot.rank]), [["cooking", 7]]);
+    assert.deepEqual(Core.getMemberLeaderboardSpots(first, members[1]), []);
+
+    const second = Core.recordLeaderboardObservation(first, message(2, [{ id: 2, name: "Babbage", rank: 99 }]), guild, members, {}, 2000);
+    assert.deepEqual(Core.getMemberLeaderboardSpots(second, members[0]), []);
+    assert.deepEqual(Core.getMemberLeaderboardSpots(second, members[1]).map((spot) => spot.rank), [99]);
+    assert.equal(Core.recordLeaderboardObservation(second, message(1, []), guild, members, {}, 3000), second);
+    const byName = Core.recordLeaderboardObservation(second, message(3, [{ id: "different-id", name: "Ada", rank: 8 }]), guild, members, {}, 4000);
+    assert.deepEqual(Core.getMemberLeaderboardSpots(byName, members[0]).map((spot) => spot.rank), [8]);
+});
+
+test("tracks observed guild leaderboard ranks including personal rows", () => {
+    const guild = { id: 42, name: "Cows" };
+    const message = {
+        leaderboardType: "guild", leaderboardCategory: "guild_points", guildTypeFilter: "standard",
+        leaderboardRevision: 5, leaderboard: { rows: [] }, personalRow: { id: 42, name: "Cows", rank: 122 },
+    };
+    const observed = Core.recordLeaderboardObservation({}, message, guild, [], {}, 4000);
+    assert.deepEqual(Core.getGuildLeaderboardSpots(observed).map((board) => [board.category, board.guildRank, board.filter]), [["guild_points", 122, "standard:all:all"]]);
+    const cleared = Core.recordLeaderboardObservation(observed, { ...message, leaderboardRevision: 6, personalRow: null }, guild, [], {}, 5000);
+    assert.deepEqual(Core.getGuildLeaderboardSpots(cleared), []);
+});
+
 test("records observed trial results without losing signup history", () => {
     const week = Date.UTC(2026, 9, 23);
     const original = { [week]: { weekStartAt: week, members: { 1: { signedSkilling: true } } } };
@@ -867,11 +935,17 @@ test("extracts economy definitions from cached and wrapped client payloads", () 
                 itemDetailDict: { "/items/apple": { guildCreditConversions: [] } },
                 guildBuffDetailMap: {},
                 guildBuffDetailDict: { "/guild_buffs/force": { levelCosts: [null, {}] } },
+                guildBuildingDetailMap: { "/guild_buildings/guild_hall": { guildPointCosts: { 1: 100 } } },
+                guildShrineDetailMap: { "/guild_shrines/force": { guildPointCosts: { 1: 50 } } },
+                leaderboardTypeDetailMap: { guild: { isGuild: true } },
             },
         },
     }));
     assert.ok(definitions.itemDetails["/items/apple"]);
     assert.ok(definitions.guildBuffDetails["/guild_buffs/force"]);
+    assert.ok(definitions.guildBuildingDetails["/guild_buildings/guild_hall"]);
+    assert.ok(definitions.guildShrineDetails["/guild_shrines/force"]);
+    assert.equal(definitions.leaderboardTypeDetails.guild.isGuild, true);
 });
 
 test("suggests first and second trial skills relative to guild medians", () => {
