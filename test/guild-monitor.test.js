@@ -116,6 +116,20 @@ test("provides skill emojis with a fallback", () => {
     assert.equal(Core.getSkillEmoji("/skills/new_skill"), "✦");
 });
 
+test("orders skills as shown in the game and keeps unlisted skills last", () => {
+    const order = [
+        "milking", "foraging", "woodcutting", "cheesesmithing", "crafting", "tailoring",
+        "cooking", "brewing", "alchemy", "enhancing", "combat", "stamina",
+        "intelligence", "attack", "defense", "melee", "ranged", "magic",
+    ];
+    const skills = [...order, "mining", "labyrinth", "total_level"].reverse().map((name) => ({
+        skillHrid: `/skills/${name}`,
+        name: Core.prettifyHrid(name),
+    }));
+    skills.sort(Core.compareSkillsByDisplayOrder);
+    assert.deepEqual(skills.map((skill) => skill.skillHrid.split("/").pop()), ["total_level", ...order, "labyrinth", "mining"]);
+});
+
 test("normalizes a profile response", () => {
     const profile = Core.normalizeProfile({
         sharableCharacter: { id: 7, name: "Grace" },
@@ -367,7 +381,7 @@ test("tracks high-level members missing a specific skilling trial", () => {
         { id: "4", name: "Noether", role: "member", signedUpSkillingTrialHrid: "", signedUpCombatTrialHrid: "" },
     ];
     const highLevelProfiles = {
-        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 151 }] },
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 151 }, { skillHrid: "/skills/foraging", level: 150 }] },
         2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 140 }] },
         3: { id: "3", name: "Curie", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 130 }] },
         4: { id: "4", name: "Noether", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 125 }] },
@@ -389,6 +403,7 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.equal(cooking.thresholdCounts[150].count, 1);
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
     assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
+    assert.equal(analysis.highLevelSkillGaps.some((gap) => gap.skillHrid === "/skills/foraging"), false);
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
     assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage", "Curie", "Noether"]);
     assert.equal(analysis.memberComparisons.find((entry) => entry.memberName === "Curie").signupStatus, "combatOnly");

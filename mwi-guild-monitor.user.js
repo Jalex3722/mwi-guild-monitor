@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.16
+// @version      0.9.17
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -33,6 +33,14 @@
     const TOTAL_LEVEL_HRID = "/skills/total_level";
     const SKILL_THRESHOLDS = [100, 125, 150];
     const TOTAL_LEVEL_THRESHOLDS = [1500, 1800, 2000];
+    const SKILL_DISPLAY_ORDER = [
+        TOTAL_LEVEL_HRID,
+        "/skills/milking", "/skills/foraging", "/skills/woodcutting", "/skills/cheesesmithing",
+        "/skills/crafting", "/skills/tailoring", "/skills/cooking", "/skills/brewing",
+        "/skills/alchemy", "/skills/enhancing", "/skills/combat", "/skills/stamina",
+        "/skills/intelligence", "/skills/attack", "/skills/defense", "/skills/melee",
+        "/skills/ranged", "/skills/magic",
+    ];
     const GUILD_BUILDING_ORDER = [
         "guild_hall", "builders_hall", "treasury", "archives",
         "skilling_encampment", "combat_encampment", "dairy_barn", "garden",
@@ -113,6 +121,13 @@
 
     function getSkillEmoji(hrid) {
         return Object.prototype.hasOwnProperty.call(SKILL_EMOJIS, hrid) ? SKILL_EMOJIS[hrid] : "✦";
+    }
+
+    function compareSkillsByDisplayOrder(left, right) {
+        const leftIndex = SKILL_DISPLAY_ORDER.indexOf(left.skillHrid);
+        const rightIndex = SKILL_DISPLAY_ORDER.indexOf(right.skillHrid);
+        return (leftIndex < 0 ? SKILL_DISPLAY_ORDER.length : leftIndex) - (rightIndex < 0 ? SKILL_DISPLAY_ORDER.length : rightIndex)
+            || left.name.localeCompare(right.name);
     }
 
     function compareGuildStructureOrder(left, right, order) {
@@ -1370,6 +1385,7 @@
         analyzeTrials,
         asObject,
         buildMemberTracking,
+        compareSkillsByDisplayOrder,
         getPreviousSnapshot,
         getPreviousWeekTrialStatus,
         getProfileIdentity,
@@ -1413,7 +1429,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.16";
+    const SCRIPT_VERSION = "0.9.17";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1444,7 +1460,7 @@ function startGuildMonitor(Core) {
         isOpen: false,
         activeTab: "skills",
         query: "",
-        sort: "name",
+        sort: "game",
         lastMessageAt: null,
         renderQueued: false,
         trialRevision: 0,
@@ -2141,7 +2157,7 @@ function startGuildMonitor(Core) {
                 <select class="mwigm-select" data-control="sort" aria-label="Sort structures">${withSelectedOption('<option value="name">Default order</option><option value="level">Highest level</option><option value="cost">Next cost</option>', state.sort)}</select>`;
         }
         const sortOptions = state.activeTab === "skills"
-            ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
+            ? `<option value="game">Default order</option><option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
             : state.activeTab === "auras"
             ? `<option value="name">Member name</option><option value="aura">Special ability</option><option value="unsigned">Unsigned first</option>`
             : state.activeTab === "members"
@@ -2208,7 +2224,7 @@ function startGuildMonitor(Core) {
             const gapStat = skill.skillHrid === Core.TOTAL_LEVEL_HRID
                 ? `<div class="mwigm-skill-stat"><span>Trial</span><strong class="mwigm-muted">--</strong></div>`
                 : !gap
-                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="This skill is not offered in the current weekly trial set"><span>Over 125 not in trial</span><strong>--</strong></div>`
+                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="This skill is not offered in the current weekly trial set"><span>Over 125 not in trial</span><strong class="mwigm-muted">N/A</strong></div>`
                 : gapNames.length
                 ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="${escapeHtml(gapNames.join(", "))}"><span>Over 125 not in trial</span><strong>${gapNames.length}</strong><span class="mwigm-subtext">${escapeHtml(gapNames.join(", "))}</span></div>`
                 : `<div class="mwigm-skill-stat mwigm-skill-gap" title="Every captured member above level 125 joined this skill's trial"><span>Over 125 not in trial</span><strong class="mwigm-up">0</strong></div>`;
@@ -2678,6 +2694,7 @@ function startGuildMonitor(Core) {
 
     function sortSkills(skills) {
         const copy = [...skills];
+        if (state.sort === "game") return copy.sort(Core.compareSkillsByDisplayOrder);
         if (state.sort === "average") return copy.sort((a, b) => b.average - a.average || a.name.localeCompare(b.name));
         if (state.sort === "median") return copy.sort((a, b) => (b.median ?? -1) - (a.median ?? -1) || a.name.localeCompare(b.name));
         if (state.sort === "max") return copy.sort((a, b) => b.maxLevel - a.maxLevel || a.name.localeCompare(b.name));
@@ -2730,7 +2747,7 @@ function startGuildMonitor(Core) {
         if (control.dataset.tab) {
             state.activeTab = control.dataset.tab;
             state.query = "";
-            state.sort = state.activeTab === "missing" ? "freshness" : "name";
+            state.sort = state.activeTab === "missing" ? "freshness" : state.activeTab === "skills" ? "game" : "name";
             if (state.activeTab === "shrines") {
                 hydrateEconomyDefinitions();
                 void refreshMarketData();
