@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.19
+// @version      0.9.20
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1429,7 +1429,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.19";
+    const SCRIPT_VERSION = "0.9.20";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2677,7 +2677,7 @@ function startGuildMonitor(Core) {
         const neededCount = aggregate.memberCount - aggregate.coveredCount;
         return `
             <div class="mwigm-status">${metric("Needs profile", neededCount)}${metric("Captured", `${aggregate.coveredCount}/${aggregate.memberCount}`)}</div>
-            ${state.profileDraftNotice ? `<div class="mwigm-notice">${escapeHtml(state.profileDraftNotice)}</div>` : ""}
+            ${state.profileDraftNotice ? `<div class="mwigm-notice mwigm-profile-draft-notice">${escapeHtml(state.profileDraftNotice)}</div>` : ""}
             ${neededCount ? `<div class="mwigm-notice mwigm-notice-info">Get profile fills an empty game chat draft. Press Enter yourself to open the profile. Last viewed records when this browser captured each profile.</div>` : ""}
             <table class="mwigm-table"><thead><tr><th style="width:45%">Member</th><th>Last viewed</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
         `;
@@ -2727,8 +2727,7 @@ function startGuildMonitor(Core) {
             return;
         }
         state.profileDraftNotice = "";
-        state.isOpen = false;
-        render();
+        document.querySelector(`#${SCRIPT_ID}-panel .mwigm-profile-draft-notice`)?.remove();
         input.focus();
     }
 

@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.19`.
+The monitor header displays its running version. The current release is `v0.9.20`.
 
 ## Collecting member skill data
 
@@ -55,7 +55,7 @@ The game sends the guild roster automatically, but it does not include every mem
 3. The userscript passively captures the `profile_shared` response and caches it.
 4. Check **GM > Missing profiles** until coverage reaches 100%.
 
-The **Get profile** button next to a member in Missing profiles fills the game's *empty* chat draft with `/profile CharacterName` and focuses it. You must press Enter yourself to open the profile. It never submits the command or overwrites an existing draft, including whitespace. If the game chat box is closed or cannot be identified, it leaves the draft alone and shows a notice.
+The **Get profile** button next to a member in Missing profiles fills the game's *empty* chat draft with `/profile CharacterName` and focuses it while keeping the GM panel open and your place in the list. You must press Enter yourself to open the profile. It never submits the command or overwrites an existing draft, including whitespace. If the game chat box is closed or cannot be identified, it leaves the draft alone and shows a notice.
 
 Combat level is captured from the profile's separate `combatLevel` field and included with the member's cached skill levels. Previously captured profiles need to be opened again to add their Combat level.
 
