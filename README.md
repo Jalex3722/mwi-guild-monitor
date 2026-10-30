@@ -44,7 +44,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.14`.
+The monitor header displays its running version. The current release is `v0.9.15`.
 
 ## Collecting member skill data
 
@@ -99,6 +99,8 @@ The script keeps a rolling local ledger of the latest signup state it observed f
 The **Guild** tab shows available and lifetime Guild Points from the current guild state, this week's observed trial points, and the latest ten Guild Point balance changes captured by this browser. It lists all building and shrine levels known to the game client. Next-upgrade costs, affordability gaps, total cost to max level, and expandable per-level Guild Point costs use the game's building and shrine definitions. Unknown costs remain blank rather than estimated.
 
 Shrines use the game's display order in both Guild and Shrines views: Force, Tempo, Spirit, Rarity, Scholar. The Guild tab's level and next-cost sorts can temporarily reorder them when selected.
+
+Buildings in the Guild tab follow the game's display order, starting with Guild Hall, Builder's Hall, Treasury, and Archives, then the encampments and skill buildings. The level and next-cost sorts can temporarily reorder them when selected.
 
 Guild leaderboard positions and top-100 member skill positions are captured from `leaderboard_updated` messages when you open those categories in the game's Leaderboard panel. The monitor makes no leaderboard requests. Observations are cached locally per guild with a timestamp; revisit a category to refresh it. A missing member badge means the category has not been observed here or that the member was not in its top 100 at the last observation. It is not a live global ranking check.
 

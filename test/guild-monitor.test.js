@@ -945,6 +945,23 @@ test("orders shrines Force, Tempo, Spirit, Rarity, Scholar in both views", () =>
     assert.deepEqual(economy.shrineGroups.map((group) => group.shrineTypeHrid.split("/").pop()), order);
 });
 
+test("orders guild buildings as shown in the game", () => {
+    const order = [
+        "guild_hall", "builders_hall", "treasury", "archives",
+        "skilling_encampment", "combat_encampment", "dairy_barn", "garden",
+        "log_shed", "forge", "workshop", "sewing_parlor",
+        "kitchen", "brewery", "laboratory", "observatory",
+        "dining_room", "library", "dojo", "armory",
+        "gym", "archery_range", "mystical_study",
+    ];
+    const details = Object.fromEntries(["future_building", ...order].reverse().map((name, index) => [
+        `/guild_buildings/${name}`,
+        { sortIndex: index, maxLevel: 20, guildPointCosts: { 1: 10 } },
+    ]));
+    const structures = Core.analyzeGuildStructures({ guildPoints: 100 }, {}, details);
+    assert.deepEqual(structures.buildings.map((building) => building.hrid.split("/").pop()), [...order, "future_building"]);
+});
+
 test("extracts economy definitions from cached and wrapped client payloads", () => {
     const definitions = Core.extractEconomyDefinitions(JSON.stringify({
         data: {

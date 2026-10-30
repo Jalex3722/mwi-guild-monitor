@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.14
+// @version      0.9.15
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -33,6 +33,14 @@
     const TOTAL_LEVEL_HRID = "/skills/total_level";
     const SKILL_THRESHOLDS = [100, 125, 150];
     const TOTAL_LEVEL_THRESHOLDS = [1500, 1800, 2000];
+    const GUILD_BUILDING_ORDER = [
+        "guild_hall", "builders_hall", "treasury", "archives",
+        "skilling_encampment", "combat_encampment", "dairy_barn", "garden",
+        "log_shed", "forge", "workshop", "sewing_parlor",
+        "kitchen", "brewery", "laboratory", "observatory",
+        "dining_room", "library", "dojo", "armory",
+        "gym", "archery_range", "mystical_study",
+    ].map((name) => `/guild_buildings/${name}`);
     const GUILD_SHRINE_ORDER = ["/guild_shrines/force", "/guild_shrines/tempo", "/guild_shrines/spirit", "/guild_shrines/rarity", "/guild_shrines/scholar"];
     const SKILL_EMOJIS = {
         "/skills/total_level": "🏅",
@@ -107,12 +115,20 @@
         return Object.prototype.hasOwnProperty.call(SKILL_EMOJIS, hrid) ? SKILL_EMOJIS[hrid] : "✦";
     }
 
-    function compareGuildShrines(left, right) {
+    function compareGuildStructureOrder(left, right, order) {
         const leftHrid = left.shrineTypeHrid || left.hrid;
         const rightHrid = right.shrineTypeHrid || right.hrid;
-        const leftOrder = GUILD_SHRINE_ORDER.indexOf(leftHrid);
-        const rightOrder = GUILD_SHRINE_ORDER.indexOf(rightHrid);
-        return (leftOrder < 0 ? GUILD_SHRINE_ORDER.length : leftOrder) - (rightOrder < 0 ? GUILD_SHRINE_ORDER.length : rightOrder) || left.name.localeCompare(right.name);
+        const leftOrder = order.indexOf(leftHrid);
+        const rightOrder = order.indexOf(rightHrid);
+        return (leftOrder < 0 ? order.length : leftOrder) - (rightOrder < 0 ? order.length : rightOrder) || left.name.localeCompare(right.name);
+    }
+
+    function compareGuildShrines(left, right) {
+        return compareGuildStructureOrder(left, right, GUILD_SHRINE_ORDER);
+    }
+
+    function compareGuildBuildings(left, right) {
+        return compareGuildStructureOrder(left, right, GUILD_BUILDING_ORDER);
     }
 
     function median(values) {
@@ -792,7 +808,7 @@
         return {
             availablePoints,
             lifetimePoints: guild && guild.lifetimeGuildPoints !== null && guild.lifetimeGuildPoints !== undefined && Number.isFinite(Number(guild.lifetimeGuildPoints)) ? Math.floor(Number(guild.lifetimeGuildPoints)) : null,
-            buildings: makeRows(buildingDetails, "building", "/guild_buildings/"),
+            buildings: makeRows(buildingDetails, "building", "/guild_buildings/").sort(compareGuildBuildings),
             shrines: makeRows(shrineDetails, "shrine", "/guild_shrines/").sort(compareGuildShrines),
         };
     }
@@ -1388,7 +1404,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.14";
+    const SCRIPT_VERSION = "0.9.15";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2323,7 +2339,7 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Guild Points history <span>Changes observed in this browser</span></div>
             ${historyRows ? `<table class="mwigm-table"><thead><tr><th>Available GP</th><th>Lifetime GP</th><th>Seen</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">No Guild Point totals have been observed yet.</div>`}
             ${!Object.keys(state.guildBuildingDetails).length && !Object.keys(state.guildShrineDetails).length ? `<div class="mwigm-notice mwigm-notice-info">Building costs need the game's client definitions. Reload after enabling the script or open the Guild panel.</div>` : ""}
-            ${structureTable("Buildings", structures.buildings)}
+            ${structureTable("Buildings", structures.buildings, true)}
             ${structureTable("Shrines", structures.shrines, true)}
         `;
     }
