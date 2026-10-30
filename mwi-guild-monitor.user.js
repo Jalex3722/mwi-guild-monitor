@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.7
+// @version      0.9.8
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1257,7 +1257,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.7";
+    const SCRIPT_VERSION = "0.9.8";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1697,7 +1697,7 @@ function startGuildMonitor(Core) {
             .mwigm-table td.mwigm-no-results { padding: 20px 12px; color: #9eafc2; text-align: center; }
             .mwigm-table tbody tr:nth-child(even) { background: #141f2d; }
             .mwigm-table tbody tr:hover { background: #213044; }
-            .mwigm-members-table { min-width: 900px; }
+            .mwigm-members-table { min-width: 820px; }
             .mwigm-skill-gap { color: #efbd70; }
             .mwigm-skill-list { border-top: 1px solid #31415c; }
             .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(58px, .5fr)) minmax(170px, 1.35fr) minmax(62px, .5fr); border-bottom: 1px solid #2b3a53; }
@@ -1730,6 +1730,10 @@ function startGuildMonitor(Core) {
             .mwigm-section-title span { color: #8fa0b7; font-size: 11px; font-weight: 400; }
             .mwigm-trial-name { font-weight: 650; color: #f4f7fb; }
             .mwigm-trial-type { color: #9aacc0; font-size: 10px; text-transform: uppercase; font-weight: 650; }
+            #${SCRIPT_ID}-panel .mwigm-trial-signed, #${SCRIPT_ID}-panel .mwigm-trial-none { font-weight: 650; }
+            #${SCRIPT_ID}-panel .mwigm-trial-signed { color: #77d2b2; }
+            #${SCRIPT_ID}-panel .mwigm-trial-none { color: #f19a91; }
+            #${SCRIPT_ID}-panel .mwigm-trial-signed::before, #${SCRIPT_ID}-panel .mwigm-trial-none::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 7px; border-radius: 50%; background: currentColor; }
             .mwigm-roster-names { display: block; margin-top: 3px; line-height: 1.35; }
             .mwigm-chip { display: inline-block; padding: 1px 5px; border: 1px solid #536681; border-radius: 4px; color: #bdc9d9; font-size: 11px; white-space: nowrap; }
             .mwigm-table .mwigm-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
@@ -1888,7 +1892,7 @@ function startGuildMonitor(Core) {
             : null;
         panel.hidden = !state.isOpen;
         const aggregate = currentAggregate();
-        button.dataset.alert = String(Boolean(state.guild && aggregate.missingMembers.length));
+        button.dataset.alert = String(Boolean(state.guild && aggregate.coveredCount < aggregate.memberCount));
         panel.querySelector(".mwigm-title span").textContent = state.guild
             ? state.guild.name || "Current guild"
             : "Open Milky Way Idle and join a guild";
@@ -1938,7 +1942,9 @@ function startGuildMonitor(Core) {
             : state.activeTab === "auras"
             ? `<option value="name">Member name</option><option value="aura">Special ability</option><option value="unsigned">Unsigned first</option>`
             : state.activeTab === "members"
-            ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option><option value="freshness">Oldest profile</option>`
+            ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option>`
+            : state.activeTab === "missing"
+            ? `<option value="freshness">Needs profile / oldest viewed</option><option value="name">Member name</option>`
             : `<option value="name">Member name</option><option value="total">Highest total</option><option value="freshness">Oldest profile</option>`;
 
         return `
@@ -2047,8 +2053,10 @@ function startGuildMonitor(Core) {
             const specialHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
             const special = Core.getSpecialAbilityDefinition(specialHrid);
             const currentSignup = Core.isCurrentSignup(member, weekStart);
-            const skillingTrial = currentSignup && member.signedUpSkillingTrialHrid ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
-            const combatTrial = currentSignup && member.signedUpCombatTrialHrid ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
+            const signedSkilling = currentSignup && Boolean(member.signedUpSkillingTrialHrid);
+            const signedCombat = currentSignup && Boolean(member.signedUpCombatTrialHrid);
+            const skillingTrial = signedSkilling ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
+            const combatTrial = signedCombat ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const activity = member.isOnline
                 ? "Online"
                 : member.hideOnlineStatus
@@ -2068,13 +2076,12 @@ function startGuildMonitor(Core) {
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
-                    <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span> ${escapeHtml(skillingTrial)}<br><span class="mwigm-trial-type">Combat</span> ${escapeHtml(combatTrial)}</td>
+                    <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span><span class="${signedSkilling ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(skillingTrial)}</span><br><span class="mwigm-trial-type">Combat</span><span class="${signedCombat ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(combatTrial)}</span></td>
                     <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span></td>
-                    <td class="${profile ? "mwigm-muted" : "mwigm-missing"}">${profile ? formatRelativeTime(profile.capturedAt) : "Not viewed"}</td>
                 </tr>
             `;
         }).join("");
-        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th><th>Profile</th></tr></thead><tbody>${rows || emptyTableRow(7)}</tbody></table>`;
+        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th></tr></thead><tbody>${rows || emptyTableRow(6)}</tbody></table>`;
     }
 
     function renderMemberTrialChoice(choice, rank, className) {
@@ -2355,15 +2362,36 @@ function startGuildMonitor(Core) {
     }
 
     function renderMissing(aggregate) {
-        if (!aggregate.missingMembers.length) {
-            return emptyState("Full coverage", "Every current guild member has a cached profile.");
-        }
         const query = state.query.toLocaleLowerCase();
-        const members = aggregate.missingMembers.filter((member) => member.name.toLocaleLowerCase().includes(query));
+        const needsProfile = (member) => !member.profile?.skills?.length;
+        const members = aggregate.members.filter((member) => member.name.toLocaleLowerCase().includes(query));
         if (!members.length) return emptyState("No matching members", "Try another member name.");
+        members.sort((left, right) => {
+            if (state.sort === "freshness") {
+                const needed = Number(needsProfile(right)) - Number(needsProfile(left));
+                if (needed) return needed;
+                const leftViewed = Core.toTimestamp(left.profile?.capturedAt) ?? 0;
+                const rightViewed = Core.toTimestamp(right.profile?.capturedAt) ?? 0;
+                if (leftViewed !== rightViewed) return leftViewed - rightViewed;
+            }
+            return left.name.localeCompare(right.name);
+        });
+        const rows = members.map((member) => {
+            const viewedAt = Core.toTimestamp(member.profile?.capturedAt);
+            const lastViewed = !member.profile ? "Not captured" : viewedAt === null ? "Unknown" : formatRelativeTime(viewedAt);
+            const viewedDate = viewedAt === null ? "" : `<span class="mwigm-subtext mwigm-roster-names">${escapeHtml(new Date(viewedAt).toLocaleString())}</span>`;
+            const needed = needsProfile(member);
+            return `<tr>
+                <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(Core.prettifyHrid(member.role))}</span></td>
+                <td>${escapeHtml(lastViewed)}${viewedDate}</td>
+                <td><span class="mwigm-chip ${needed ? "mwigm-chip-warn" : "mwigm-chip-good"}">${needed ? "Needed" : "Captured"}</span></td>
+            </tr>`;
+        }).join("");
+        const neededCount = aggregate.memberCount - aggregate.coveredCount;
         return `
-            <div class="mwigm-notice mwigm-notice-info">Open these members' profiles from the game's Guild panel. The monitor captures the response passively; it never clicks or requests profiles for you.</div>
-            <ul class="mwigm-list">${members.map((member) => `<li><span><strong>${escapeHtml(member.name)}</strong><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))}</span></span><span class="mwigm-missing">Needed</span></li>`).join("")}</ul>
+            <div class="mwigm-status">${metric("Needs profile", neededCount)}${metric("Captured", `${aggregate.coveredCount}/${aggregate.memberCount}`)}</div>
+            ${neededCount ? `<div class="mwigm-notice mwigm-notice-info">Open missing profiles from the game's Guild panel. Last viewed records when this browser captured each profile.</div>` : ""}
+            <table class="mwigm-table"><thead><tr><th style="width:45%">Member</th><th>Last viewed</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>
         `;
     }
 
@@ -2434,7 +2462,7 @@ function startGuildMonitor(Core) {
         if (control.dataset.tab) {
             state.activeTab = control.dataset.tab;
             state.query = "";
-            state.sort = "name";
+            state.sort = state.activeTab === "missing" ? "freshness" : "name";
             if (state.activeTab === "shrines") {
                 hydrateEconomyDefinitions();
                 void refreshMarketData();

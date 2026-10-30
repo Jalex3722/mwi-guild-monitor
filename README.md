@@ -7,14 +7,14 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 ## Features
 
 - Guild roster with role, online state, guild XP, and weekly XP when supplied by the game
-- Member activity, 3-day offline warnings, strongest captured skill, profile freshness, and current trial choices
+- Member activity, 3-day offline warnings, strongest captured skill, and color-coded current trial signups
 - Average, median, minimum, and maximum level for every captured skill
 - Visible highest-level member names and counts above levels 100, 125, and 150
 - Total Level counts above 1500, 1800, and 2000
 - Emoji icons beside skill names
 - Current-week warnings when a member above level 125 did not join that skill's trial
 - Explicit profile coverage so partial averages cannot be mistaken for full-guild results
-- Missing-profile checklist
+- Missing-profile roster with last-viewed timestamps for every member
 - Locally cached member profiles and capture age
 - Manual snapshots with average-level change comparison
 - Weekly skilling and combat trial signup counts
@@ -41,7 +41,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.7`.
+The monitor header displays its running version. The current release is `v0.9.8`.
 
 ## Collecting member skill data
 
@@ -65,6 +65,8 @@ For a skill offered in the current weekly trials, `>125 not in trial` lists capt
 Select **Snapshot** to save the current aggregate locally. The `Change` column compares the current average with the latest saved snapshot. Because profiles are captured at different times, treat snapshots as operational estimates rather than synchronized leaderboard records.
 
 The **Members** tab places each captured member's first and second median-fit trial choices beside their name. It also flags a player after a known offline duration reaches 72 hours. A hidden online status or unavailable timestamp is shown separately and is never treated as a 3-day absence.
+
+In the **Current trials** column, green text and a green dot mean the member is signed up for that skilling or combat trial this week. Red **None** means no current signup in that category. The **Missing profiles** tab lists the full roster, with profiles still needed first, and shows when this browser last captured each available profile (both relative time and local date/time). It does not reconstruct profiles viewed before the monitor was installed.
 
 The first and second choices use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
