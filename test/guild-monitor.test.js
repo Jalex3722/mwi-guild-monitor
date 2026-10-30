@@ -89,8 +89,30 @@ test("tracks total levels over 1500, 1800, and 2000", () => {
 });
 
 test("provides skill emojis with a fallback", () => {
-    assert.equal(Core.getSkillEmoji(Core.TOTAL_LEVEL_HRID), "🏅");
-    assert.equal(Core.getSkillEmoji("/skills/milking"), "🥛");
+    const expected = {
+        [Core.TOTAL_LEVEL_HRID]: "🏅",
+        "/skills/labyrinth": "🌀",
+        "/skills/milking": "🥛",
+        "/skills/foraging": "🍄",
+        "/skills/woodcutting": "🌳",
+        "/skills/mining": "⛏️",
+        "/skills/cheesesmithing": "🧀",
+        "/skills/crafting": "🪡",
+        "/skills/tailoring": "👕",
+        "/skills/cooking": "🧑‍🍳",
+        "/skills/brewing": "🍵",
+        "/skills/alchemy": "⚛️",
+        "/skills/enhancing": "🔨",
+        "/skills/combat": "⚔️",
+        "/skills/stamina": "💪",
+        "/skills/intelligence": "🧠",
+        "/skills/attack": "🗡️",
+        "/skills/defense": "🛡️",
+        "/skills/melee": "👊",
+        "/skills/ranged": "🏹",
+        "/skills/magic": "🪄",
+    };
+    Object.entries(expected).forEach(([hrid, emoji]) => assert.equal(Core.getSkillEmoji(hrid), emoji, hrid));
     assert.equal(Core.getSkillEmoji("/skills/new_skill"), "✦");
 });
 

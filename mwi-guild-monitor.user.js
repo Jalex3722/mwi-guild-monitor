@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.9
+// @version      0.9.10
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -35,22 +35,23 @@
     const TOTAL_LEVEL_THRESHOLDS = [1500, 1800, 2000];
     const SKILL_EMOJIS = {
         "/skills/total_level": "🏅",
+        "/skills/labyrinth": "🌀",
         "/skills/milking": "🥛",
-        "/skills/foraging": "🌿",
-        "/skills/woodcutting": "🪓",
+        "/skills/foraging": "🍄",
+        "/skills/woodcutting": "🌳",
         "/skills/mining": "⛏️",
         "/skills/cheesesmithing": "🧀",
-        "/skills/crafting": "🔨",
-        "/skills/tailoring": "🧵",
-        "/skills/cooking": "🍳",
+        "/skills/crafting": "🪡",
+        "/skills/tailoring": "👕",
+        "/skills/cooking": "🧑‍🍳",
         "/skills/brewing": "🍵",
-        "/skills/alchemy": "⚗️",
-        "/skills/enhancing": "✨",
-        "/skills/attack": "⚔️",
+        "/skills/alchemy": "⚛️",
+        "/skills/enhancing": "🔨",
+        "/skills/attack": "🗡️",
         "/skills/defense": "🛡️",
-        "/skills/melee": "🗡️",
+        "/skills/melee": "👊",
         "/skills/ranged": "🏹",
-        "/skills/magic": "🔮",
+        "/skills/magic": "🪄",
         "/skills/stamina": "💪",
         "/skills/intelligence": "🧠",
         "/skills/combat": "⚔️",
@@ -1251,7 +1252,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.9";
+    const SCRIPT_VERSION = "0.9.10";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
