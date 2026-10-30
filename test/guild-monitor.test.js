@@ -927,6 +927,24 @@ test("groups combat and skilling buffs by shrine family", () => {
     assert.equal(economy.shrineGroups[0].pricedLevelCount, 2);
 });
 
+test("orders shrines Force, Tempo, Spirit, Rarity, Scholar in both views", () => {
+    const order = ["force", "tempo", "spirit", "rarity", "scholar"];
+    const scrambled = ["scholar", "rarity", "spirit", "tempo", "force"];
+    const shrineDetails = Object.fromEntries(scrambled.map((name, index) => [
+        `/guild_shrines/${name}`,
+        { maxLevel: 20, sortIndex: index, guildPointCosts: { 1: 10 } },
+    ]));
+    const guildBuffDetails = Object.fromEntries(scrambled.map((name) => [
+        `/guild_buffs/${name}_combat`,
+        { guildShrineHrid: `/guild_shrines/${name}`, levelCosts: [null, { guildTokenCost: 1 }] },
+    ]));
+
+    const structures = Core.analyzeGuildStructures({ guildPoints: 100 }, {}, {}, shrineDetails);
+    const economy = Core.analyzeGuildEconomy({ guildBuffDetails });
+    assert.deepEqual(structures.shrines.map((shrine) => shrine.hrid.split("/").pop()), order);
+    assert.deepEqual(economy.shrineGroups.map((group) => group.shrineTypeHrid.split("/").pop()), order);
+});
+
 test("extracts economy definitions from cached and wrapped client payloads", () => {
     const definitions = Core.extractEconomyDefinitions(JSON.stringify({
         data: {

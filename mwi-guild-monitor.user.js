@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.13
+// @version      0.9.14
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -33,6 +33,7 @@
     const TOTAL_LEVEL_HRID = "/skills/total_level";
     const SKILL_THRESHOLDS = [100, 125, 150];
     const TOTAL_LEVEL_THRESHOLDS = [1500, 1800, 2000];
+    const GUILD_SHRINE_ORDER = ["/guild_shrines/force", "/guild_shrines/tempo", "/guild_shrines/spirit", "/guild_shrines/rarity", "/guild_shrines/scholar"];
     const SKILL_EMOJIS = {
         "/skills/total_level": "🏅",
         "/skills/labyrinth": "🌀",
@@ -104,6 +105,14 @@
 
     function getSkillEmoji(hrid) {
         return Object.prototype.hasOwnProperty.call(SKILL_EMOJIS, hrid) ? SKILL_EMOJIS[hrid] : "✦";
+    }
+
+    function compareGuildShrines(left, right) {
+        const leftHrid = left.shrineTypeHrid || left.hrid;
+        const rightHrid = right.shrineTypeHrid || right.hrid;
+        const leftOrder = GUILD_SHRINE_ORDER.indexOf(leftHrid);
+        const rightOrder = GUILD_SHRINE_ORDER.indexOf(rightHrid);
+        return (leftOrder < 0 ? GUILD_SHRINE_ORDER.length : leftOrder) - (rightOrder < 0 ? GUILD_SHRINE_ORDER.length : rightOrder) || left.name.localeCompare(right.name);
     }
 
     function median(values) {
@@ -684,7 +693,7 @@
                 levelCount: group.buffs.reduce((sum, buff) => sum + buff.levels.length, 0),
                 pricedLevelCount: group.buffs.flatMap((buff) => buff.levels).filter((level) => Number.isFinite(level.incrementalCost)).length,
             }))
-            .sort((left, right) => left.name.localeCompare(right.name));
+            .sort(compareGuildShrines);
 
         return {
             credits,
@@ -784,7 +793,7 @@
             availablePoints,
             lifetimePoints: guild && guild.lifetimeGuildPoints !== null && guild.lifetimeGuildPoints !== undefined && Number.isFinite(Number(guild.lifetimeGuildPoints)) ? Math.floor(Number(guild.lifetimeGuildPoints)) : null,
             buildings: makeRows(buildingDetails, "building", "/guild_buildings/"),
-            shrines: makeRows(shrineDetails, "shrine", "/guild_shrines/"),
+            shrines: makeRows(shrineDetails, "shrine", "/guild_shrines/").sort(compareGuildShrines),
         };
     }
 
@@ -1379,7 +1388,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.13";
+    const SCRIPT_VERSION = "0.9.14";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2104,7 +2113,7 @@ function startGuildMonitor(Core) {
         }
         if (state.activeTab === "guild") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
-                <select class="mwigm-select" data-control="sort" aria-label="Sort structures">${withSelectedOption('<option value="name">Name</option><option value="level">Highest level</option><option value="cost">Next cost</option>', state.sort)}</select>`;
+                <select class="mwigm-select" data-control="sort" aria-label="Sort structures">${withSelectedOption('<option value="name">Default order</option><option value="level">Highest level</option><option value="cost">Next cost</option>', state.sort)}</select>`;
         }
         const sortOptions = state.activeTab === "skills"
             ? `<option value="name">Skill name</option><option value="average">Highest average</option><option value="median">Highest median</option><option value="max">Highest max</option><option value="min">Lowest min</option>`
@@ -2283,11 +2292,11 @@ function startGuildMonitor(Core) {
             <td class="mwigm-muted">${escapeHtml(new Date(entry.observedAt).toLocaleString())}</td>
         </tr>`).join("");
         const query = state.query.toLocaleLowerCase();
-        const structureTable = (label, entries) => {
+        const structureTable = (label, entries, preserveOrder = false) => {
             let rows = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(query));
             if (state.sort === "level") rows = [...rows].sort((left, right) => (right.currentLevel ?? -1) - (left.currentLevel ?? -1) || left.name.localeCompare(right.name));
             else if (state.sort === "cost") rows = [...rows].sort((left, right) => (left.nextCost ?? Infinity) - (right.nextCost ?? Infinity) || left.name.localeCompare(right.name));
-            else rows = [...rows].sort((left, right) => left.name.localeCompare(right.name));
+            else if (!preserveOrder) rows = [...rows].sort((left, right) => left.name.localeCompare(right.name));
             const body = rows.map((entry) => {
                 const costs = entry.levelCosts.length ? `<details class="mwigm-building-costs" ${state.expandedBuildingCosts.has(entry.hrid) ? "open" : ""}>
                     <summary data-action="toggle-building" data-building-hrid="${escapeHtml(entry.hrid)}">Level costs</summary>
@@ -2315,7 +2324,7 @@ function startGuildMonitor(Core) {
             ${historyRows ? `<table class="mwigm-table"><thead><tr><th>Available GP</th><th>Lifetime GP</th><th>Seen</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">No Guild Point totals have been observed yet.</div>`}
             ${!Object.keys(state.guildBuildingDetails).length && !Object.keys(state.guildShrineDetails).length ? `<div class="mwigm-notice mwigm-notice-info">Building costs need the game's client definitions. Reload after enabling the script or open the Guild panel.</div>` : ""}
             ${structureTable("Buildings", structures.buildings)}
-            ${structureTable("Shrines", structures.shrines)}
+            ${structureTable("Shrines", structures.shrines, true)}
         `;
     }
 
