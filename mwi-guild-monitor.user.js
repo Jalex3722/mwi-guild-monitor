@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.15
+// @version      0.9.16
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -177,8 +177,17 @@
     function normalizeProfile(profile, capturedAt = Date.now()) {
         const identity = getProfileIdentity(profile);
         const skills = normalizeSkills(profile && profile.characterSkills);
-
         if ((!identity.id && !identity.name) || skills.length === 0) return null;
+
+        const sharable = asObject(profile && profile.sharableCharacter);
+        const combatLevel = [profile && profile.combatLevel, profile && profile.combat_level, sharable.combatLevel, sharable.combat_level]
+            .map(Number)
+            .find((level) => Number.isFinite(level) && level > 0);
+        if (combatLevel !== undefined) {
+            const combatSkill = skills.find((skill) => skill.skillHrid === "/skills/combat");
+            if (combatSkill) combatSkill.level = combatLevel;
+            else skills.push({ skillHrid: "/skills/combat", level: combatLevel, experience: 0 });
+        }
 
         return {
             id: identity.id,
@@ -1404,7 +1413,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.15";
+    const SCRIPT_VERSION = "0.9.16";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;

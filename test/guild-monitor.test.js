@@ -128,6 +128,43 @@ test("normalizes a profile response", () => {
     assert.equal(profile.skills[0].level, 72);
 });
 
+test("captures profile combat level alongside character skills", () => {
+    const profile = Core.normalizeProfile({
+        sharableCharacter: { id: 7, name: "Grace", combatLevel: 106 },
+        combatLevel: 115,
+        characterSkills: [
+            { skillHrid: "/skills/foraging", level: 72, experience: 123 },
+            { skillHrid: "/skills/combat", level: 99, experience: 0 },
+        ],
+    }, 5000);
+    const combat = profile.skills.filter((skill) => skill.skillHrid === "/skills/combat");
+    const aggregate = Core.aggregateGuild([{ id: "7", name: "Grace" }], { 7: profile });
+
+    assert.equal(combat.length, 1);
+    assert.equal(combat[0].level, 115);
+    assert.equal(aggregate.skills.find((skill) => skill.skillHrid === "/skills/combat").average, 115);
+    assert.equal(Core.getEffectiveAuraAssignment({}, aggregate.members[0]), "/abilities/insanity");
+});
+
+test("uses nested profile combat level when it is not listed as a skill", () => {
+    const profile = Core.normalizeProfile({
+        sharableCharacter: { id: 8, name: "Hopper", combatLevel: "109" },
+        characterSkills: [{ skillHrid: "/skills/cooking", level: 80 }],
+    });
+    const missing = Core.normalizeProfile({
+        sharableCharacter: { id: 9, name: "Turing", combatLevel: "unknown" },
+        characterSkills: [{ skillHrid: "/skills/cooking", level: 85 }],
+    });
+
+    assert.equal(profile.skills.find((skill) => skill.skillHrid === "/skills/combat").level, 109);
+    assert.equal(missing.skills.some((skill) => skill.skillHrid === "/skills/combat"), false);
+    assert.equal(Core.normalizeProfile({
+        sharableCharacter: { id: 10, name: "Lovelace" },
+        combatLevel: 120,
+        characterSkills: [],
+    }), null);
+});
+
 test("exports quoted CSV cells", () => {
     const result = Core.aggregateGuild(
         [{ ...roster[0], name: "Ada, First" }],
