@@ -41,7 +41,7 @@ It never sends gameplay commands. Its only additional request is a cached read-o
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.9.10`.
+The monitor header displays its running version. The current release is `v0.9.11`.
 
 ## Collecting member skill data
 
@@ -103,9 +103,11 @@ Open the **Auras** tab to designate one special ability per guild member. The ch
 - Insanity
 - Revive
 
-The assignment table shows a captured scaling-skill level for auras and the member's current combat-trial signup. The Trials tab evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial. Insanity and Revive are listed separately with their assigned player names and counts; multiple users are allowed and they do not affect aura coverage.
+When a captured profile has a Combat level, the default is **Insanity** at level 110 or higher and **Revive** below 110. Without a captured Combat level, the member stays unassigned. These defaults follow updated profiles and appear in the Auras, Members, Trials, and CSV views. A manual selection, including **No special assigned**, overrides the default; choose **Auto** to restore it.
 
-Special-ability assignments are manual planning labels. The script does not inspect equipped trial loadouts, equip abilities, or change signups. Existing aura assignments are preserved, and all assignments are saved per guild in the same local browser storage as captured profiles.
+The assignment table shows a captured scaling-skill level for auras or Combat level for utility abilities, plus the member's current combat-trial signup. The Trials tab evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial. Insanity and Revive are listed separately with their assigned player names and counts; multiple users are allowed and they do not affect aura coverage.
+
+Special-ability assignments are planning labels. The script does not inspect equipped trial loadouts, equip abilities, or change signups. Existing manual aura assignments are preserved, and manual overrides are saved per guild in the same local browser storage as captured profiles.
 
 ## Shrine economics
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.9.10
+// @version      0.9.11
 // @description  Read-only guild, trial, shrine, and market analytics for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -713,6 +713,16 @@
         return assignment && typeof assignment.auraHrid === "string" ? assignment.auraHrid : "";
     }
 
+    function getEffectiveAuraAssignment(auraAssignments, member) {
+        if (!member) return "";
+        if (Object.prototype.hasOwnProperty.call(asObject(auraAssignments), String(member.id))) {
+            return getAuraAssignment(auraAssignments, member.id);
+        }
+        const combatLevel = getProfileSkillLevel(member, "/skills/combat");
+        if (!Number.isFinite(combatLevel)) return "";
+        return combatLevel >= 110 ? "/abilities/insanity" : "/abilities/revive";
+    }
+
     function getTrialCapacity(kind, buildingLevels = {}) {
         if (buildingLevels === null) return null;
         const isCombat = kind === "combat";
@@ -750,7 +760,7 @@
             const active = isCurrentSignup(member, guildWeekStartAt, now);
             return {
                 ...member,
-                desiredAuraHrid: getAuraAssignment(auraAssignments, member.id),
+                desiredAuraHrid: getEffectiveAuraAssignment(auraAssignments, member),
                 currentSkillingTrialHrid: active ? member.signedUpSkillingTrialHrid : "",
                 currentCombatTrialHrid: active ? member.signedUpCombatTrialHrid : "",
                 currentCombatRoleHrid: active ? member.signedUpCombatRoleHrid : "",
@@ -1181,7 +1191,7 @@
                 prettifyHrid(member.role),
                 member.experience,
                 member.weeklyExperience,
-                (getSpecialAbilityDefinition(getAuraAssignment(auraAssignments, member.id)) || {}).name || "",
+                (getSpecialAbilityDefinition(getEffectiveAuraAssignment(auraAssignments, member)) || {}).name || "",
                 tracking && tracking.offlineDurationMs !== null ? (tracking.offlineDurationMs / DAY_MS).toFixed(1) : "",
                 tracking && tracking.offlineThreeDays ? "Yes" : "No",
                 previousWeekLabel,
@@ -1218,7 +1228,9 @@
         getPreviousSnapshot,
         getPreviousWeekTrialStatus,
         getProfileIdentity,
+        getProfileSkillLevel,
         getAuraAssignment,
+        getEffectiveAuraAssignment,
         getAuraDefinition,
         getSpecialAbilityDefinition,
         getItemName,
@@ -1252,7 +1264,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.9.10";
+    const SCRIPT_VERSION = "0.9.11";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1455,7 +1467,7 @@ function startGuildMonitor(Core) {
     function setAuraAssignment(memberId, auraHrid) {
         if (!state.guild) return;
         const { store, key } = ensureGuildStore();
-        if (auraHrid) {
+        if (auraHrid !== "__auto__") {
             store.guilds[key].auraAssignments[String(memberId)] = {
                 auraHrid,
                 updatedAt: Date.now(),
@@ -2042,7 +2054,7 @@ function startGuildMonitor(Core) {
             const trialSuggestion = medianSuggestionById.get(String(member.id));
             const total = profile ? profile.skills.find((skill) => skill.skillHrid === Core.TOTAL_LEVEL_HRID) : null;
             const strongest = Core.strongestSkill(member, state.skillDetails);
-            const specialHrid = Core.getAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member.id);
+            const specialHrid = Core.getEffectiveAuraAssignment(state.guildStore ? state.guildStore.auraAssignments : {}, member);
             const special = Core.getSpecialAbilityDefinition(specialHrid);
             const currentSignup = Core.isCurrentSignup(member, weekStart);
             const signedSkilling = currentSignup && Boolean(member.signedUpSkillingTrialHrid);
@@ -2199,20 +2211,21 @@ function startGuildMonitor(Core) {
         const analysis = currentTrialAnalysis(aggregate);
         const assignments = state.guildStore ? state.guildStore.auraAssignments : {};
         const query = state.query.toLocaleLowerCase();
+        const effectiveAssignment = (member) => Core.getEffectiveAuraAssignment(assignments, member);
         const countsFor = (definitions) => definitions.map((ability) => ({
             ...ability,
-            count: aggregate.members.filter((member) => Core.getAuraAssignment(assignments, member.id) === ability.hrid).length,
+            count: aggregate.members.filter((member) => effectiveAssignment(member) === ability.hrid).length,
         }));
         const auraCounts = countsFor(Core.AURA_DEFINITIONS);
         const utilityCounts = countsFor(Core.UTILITY_DEFINITIONS);
         let members = aggregate.members.filter((member) => {
-            const ability = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, member.id));
+            const ability = Core.getSpecialAbilityDefinition(effectiveAssignment(member));
             return member.name.toLocaleLowerCase().includes(query) || (ability && ability.name.toLocaleLowerCase().includes(query));
         });
         if (state.sort === "aura") {
             members = [...members].sort((left, right) => {
-                const leftAbility = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, left.id));
-                const rightAbility = Core.getSpecialAbilityDefinition(Core.getAuraAssignment(assignments, right.id));
+                const leftAbility = Core.getSpecialAbilityDefinition(effectiveAssignment(left));
+                const rightAbility = Core.getSpecialAbilityDefinition(effectiveAssignment(right));
                 return (leftAbility ? leftAbility.name : "Zzz").localeCompare(rightAbility ? rightAbility.name : "Zzz") || left.name.localeCompare(right.name);
             });
         } else if (state.sort === "unsigned") {
@@ -2228,14 +2241,18 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Utility abilities</div>
             <div class="mwigm-utility-grid">${utilityCounts.map((ability) => `<div class="mwigm-aura-summary"><strong>${ability.count}</strong><span>${escapeHtml(ability.name)}</span></div>`).join("")}</div>
         `;
-        const options = (selected) => [
-            `<option value="">No special assigned</option>`,
+        const options = (selected, automaticName) => [
+            `<option value="__auto__"${selected === "__auto__" ? " selected" : ""}>Auto: ${escapeHtml(automaticName)}</option>`,
+            `<option value=""${selected === "" ? " selected" : ""}>No special assigned</option>`,
             `<optgroup label="Auras">${Core.AURA_DEFINITIONS.map((ability) => `<option value="${escapeHtml(ability.hrid)}"${ability.hrid === selected ? " selected" : ""}>${escapeHtml(ability.name)}</option>`).join("")}</optgroup>`,
             `<optgroup label="Utility abilities">${Core.UTILITY_DEFINITIONS.map((ability) => `<option value="${escapeHtml(ability.hrid)}"${ability.hrid === selected ? " selected" : ""}>${escapeHtml(ability.name)}</option>`).join("")}</optgroup>`,
         ].join("");
         const rows = members.map((member) => {
-            const abilityHrid = Core.getAuraAssignment(assignments, member.id);
+            const automatic = !Object.prototype.hasOwnProperty.call(Core.asObject(assignments), String(member.id));
+            const abilityHrid = effectiveAssignment(member);
             const ability = Core.getSpecialAbilityDefinition(abilityHrid);
+            const automaticAbility = Core.getSpecialAbilityDefinition(Core.getEffectiveAuraAssignment({}, member));
+            const combatLevel = Core.getProfileSkillLevel(member, "/skills/combat");
             const scalingSkill = ability?.scalingSkillHrid && member.profile ? member.profile.skills.find((skill) => skill.skillHrid === ability.scalingSkillHrid) : null;
             const trial = analysis.combat.find((entry) => entry.signups.some((signup) => signup.memberId === member.id));
             const tracking = analysis.auraTracking.find((entry) => entry.memberId === member.id);
@@ -2244,8 +2261,8 @@ function startGuildMonitor(Core) {
             return `
                 <tr>
                     <td><span class="mwigm-member-name">${escapeHtml(member.name)}</span><br><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${trial ? escapeHtml(trial.name) : "Not signed"}</span></td>
-                    <td><select class="mwigm-aura-select" data-aura-member-id="${escapeHtml(member.id)}" aria-label="Desired special ability for ${escapeHtml(member.name)}">${options(abilityHrid)}</select></td>
-                    <td>${ability?.scalingSkillHrid ? `${escapeHtml(Core.getSkillName(ability.scalingSkillHrid, state.skillDetails))} ${scalingSkill ? scalingSkill.level : "--"}` : "--"}</td>
+                    <td><select class="mwigm-aura-select" data-aura-member-id="${escapeHtml(member.id)}" aria-label="Desired special ability for ${escapeHtml(member.name)}">${options(automatic ? "__auto__" : abilityHrid, automaticAbility?.name || "combat level unknown")}</select></td>
+                    <td>${ability?.scalingSkillHrid ? `${escapeHtml(Core.getSkillName(ability.scalingSkillHrid, state.skillDetails))} ${scalingSkill ? scalingSkill.level : "--"}` : `Combat ${combatLevel ?? "--"}`}</td>
                     <td>${trial ? escapeHtml(trial.name) : "Not signed"}</td>
                     <td><span class="mwigm-chip ${statusClass}">${statusText}</span></td>
                 </tr>
@@ -2254,8 +2271,8 @@ function startGuildMonitor(Core) {
 
         return `
             ${summary}
-            <div class="mwigm-notice mwigm-notice-info">One designated special ability per member. Assignments are planning labels stored only in this browser; equipped abilities and trial loadouts are not verified.</div>
-            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired special</th><th>Aura skill</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
+            <div class="mwigm-notice mwigm-notice-info">Automatic: Insanity at captured Combat level 110+, Revive below 110. Missing Combat level stays unassigned. Manual selections override the default; these are planning labels, not verified loadouts.</div>
+            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired special</th><th>Skill level</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
         `;
     }
 

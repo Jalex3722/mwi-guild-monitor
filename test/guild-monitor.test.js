@@ -606,6 +606,40 @@ test("tracks Insanity and Revive without changing exact-one aura coverage", () =
     assert.equal(snapshot.trials.combatUtilityAssignments.badger["/abilities/revive"], 2);
 });
 
+test("defaults special abilities by captured combat level without replacing manual choices", () => {
+    const members = [
+        { id: "1", name: "Below", signedUpCombatTrialHrid: "badger" },
+        { id: "2", name: "At threshold", signedUpCombatTrialHrid: "badger" },
+        { id: "3", name: "Manual aura", signedUpCombatTrialHrid: "badger" },
+        { id: "4", name: "Manual none", signedUpCombatTrialHrid: "badger" },
+        { id: "5", name: "Unknown", signedUpCombatTrialHrid: "badger" },
+    ];
+    const combatProfiles = Object.fromEntries([109, 110, 130, 100].map((level, index) => [String(index + 1), {
+        id: String(index + 1), name: members[index].name, capturedAt: 1,
+        skills: [{ skillHrid: "/skills/combat", level }],
+    }]));
+    const aggregate = Core.aggregateGuild(members, combatProfiles);
+    const assignments = {
+        3: { auraHrid: "/abilities/speed_aura" },
+        4: { auraHrid: "" },
+    };
+    assert.deepEqual(aggregate.members.map((member) => Core.getEffectiveAuraAssignment(assignments, member)), [
+        "/abilities/revive", "/abilities/insanity", "/abilities/speed_aura", "", "",
+    ]);
+    assert.equal(Core.getEffectiveAuraAssignment({}, aggregate.members[2]), "/abilities/insanity");
+    const analysis = Core.analyzeTrials({
+        aggregate,
+        weeklyTrialSet: { combatHrids: ["badger"] },
+        auraAssignments: assignments,
+    });
+    const badger = analysis.combat[0];
+    assert.equal(badger.utilityAssignments.find((ability) => ability.name === "Insanity").count, 1);
+    assert.equal(badger.utilityAssignments.find((ability) => ability.name === "Revive").count, 1);
+    assert.equal(badger.auraCoverage.find((aura) => aura.name === "Speed Aura").count, 1);
+    assert.match(Core.toCsv(aggregate, {}, {}, assignments), /Below[^\r\n]*Revive/);
+    assert.match(Core.toCsv(aggregate, {}, {}, assignments), /At threshold[^\r\n]*Insanity/);
+});
+
 test("includes desired special abilities in CSV exports", () => {
     const aggregate = Core.aggregateGuild([roster[0], roster[1]], profiles);
     const csv = Core.toCsv(aggregate, {}, {}, {
