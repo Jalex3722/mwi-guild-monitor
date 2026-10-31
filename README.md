@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.10.1`.
+The monitor header displays its running version. The current release is `v0.10.2`.
 
 ## Collecting member skill data
 
@@ -63,7 +63,7 @@ This is intentionally manual. Automatically requesting every profile would send 
 
 ## Reading the dashboard
 
-The skill table shows both the arithmetic mean and median of captured members' displayed levels. `Min` and `Max` are the lowest and highest displayed level for that skill. The max-level member names are shown directly. Regular skill threshold columns count levels strictly greater than 100, 125, and 150; the Total Level row counts strictly greater than 1500, 1800, and 2000. Hover over a count to see its members and levels. Skill names use emoji approximations of the game's icons, with a neutral symbol for unfamiliar skills. The default order keeps Total Level first, then Milking through Magic in the game's skill-list order; unlisted skills follow alphabetically. For each skill offered in this week's skilling trials, `Over 125, no skilling signup` lists captured members above level 125 who have not joined any skilling trial this week, including combat-only signups. For unoffered skills, it displays `N/A`.
+The skill table shows both the arithmetic mean and median of captured members' displayed levels. `Min` and `Max` are the lowest and highest displayed level for that skill. The max-level member names are shown directly. Regular skill threshold columns count levels strictly greater than 100, 125, and 150; the Total Level row counts strictly greater than 1500, 1800, and 2000. Hover over a count to see its members and levels. Skill names use emoji approximations of the game's icons, with a neutral symbol for unfamiliar skills. The default order keeps Total Level first, then Milking through Magic in the game's skill-list order; unlisted skills follow alphabetically. For each skill offered in this week's skilling trials, `Over 125, no skilling signup` lists captured members above level 125 who have not joined any skilling trial this week, including combat-only signups. It shows `All signed up` when all captured members above 125 have a current skilling signup, `No one over 125` when there are no qualifying captured members, and `N/A` for unoffered skills.
 
 This is separate from the general participation warning, which only lists members who joined neither a skilling nor a combat trial.
 

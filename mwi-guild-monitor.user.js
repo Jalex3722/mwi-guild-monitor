@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.10.1
+// @version      0.10.2
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1429,7 +1429,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.10.1";
+    const SCRIPT_VERSION = "0.10.2";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2230,7 +2230,9 @@ function startGuildMonitor(Core) {
                 ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="This skill is not offered in the current weekly trial set"><span>Over 125, no skilling signup</span><strong class="mwigm-muted">N/A</strong></div>`
                 : gapNames.length
                 ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="${escapeHtml(gapNames.join(", "))}"><span>Over 125, no skilling signup</span><strong>${gapNames.length}</strong><span class="mwigm-subtext">${escapeHtml(gapNames.join(", "))}</span></div>`
-                : `<div class="mwigm-skill-stat mwigm-skill-gap" title="Every captured member above level 125 has a current skilling signup"><span>Over 125, no skilling signup</span><strong class="mwigm-up">0</strong></div>`;
+                : skill.thresholdCounts[125].count === 0
+                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="No captured member is above level 125 in this skill"><span>Over 125, no skilling signup</span><strong class="mwigm-muted">No one over 125</strong></div>`
+                : `<div class="mwigm-skill-stat mwigm-skill-gap" title="Every captured member above level 125 has a current skilling signup"><span>Over 125, no skilling signup</span><strong class="mwigm-up">All signed up</strong></div>`;
             return `
                 <div class="mwigm-skill-row" title="Minimum: ${escapeHtml(skill.minMembers.join(", "))}">
                     <div class="mwigm-skill-primary">
