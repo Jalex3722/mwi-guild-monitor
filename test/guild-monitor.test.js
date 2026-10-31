@@ -373,7 +373,7 @@ test("records observed trial results without losing signup history", () => {
     assert.equal(afterSignupObservation[week].results.cook.highestTier, 3);
 });
 
-test("tracks high-level members missing a specific skilling trial", () => {
+test("tracks high-level members without any current skilling signup", () => {
     const highLevelRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook", signedUpCombatTrialHrid: "badger" },
         { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "mine", signedUpCombatTrialHrid: "" },
@@ -402,7 +402,7 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.equal(cooking.thresholdCounts[125].count, 3);
     assert.equal(cooking.thresholdCounts[150].count, 1);
     assert.deepEqual(cooking.maxMembers, ["Ada"]);
-    assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Babbage", "Curie"]);
+    assert.deepEqual(cookingGap.members.map((member) => member.memberName), ["Curie"]);
     assert.equal(analysis.highLevelSkillGaps.some((gap) => gap.skillHrid === "/skills/foraging"), false);
     assert.deepEqual(analysis.unsignedTrials.map((member) => member.name), ["Noether"]);
     assert.deepEqual(analysis.recommendations.map((entry) => entry.memberName).sort(), ["Ada", "Babbage", "Curie", "Noether"]);
@@ -412,6 +412,41 @@ test("tracks high-level members missing a specific skilling trial", () => {
     assert.deepEqual(analysis.wrongRecommendedSignup.map((entry) => entry.memberName), ["Babbage"]);
     assert.equal(analysis.wrongRecommendedSignup[0].currentTrialName, "Mine");
     assert.equal(analysis.optimalDistribution[0].assignments.length, 4);
+});
+
+test("skill gaps use this week's offered skills and exclude signups to other skilling trials", () => {
+    const currentWeek = Date.UTC(2026, 9, 23);
+    const previousWeek = currentWeek - 7 * Core.DAY_MS;
+    const roster = [
+        { id: "1", name: "Cook", signedUpSkillingTrialHrid: "cook", signupWeekStartAt: currentWeek },
+        { id: "2", name: "Forager", signedUpSkillingTrialHrid: "forage", signupWeekStartAt: currentWeek },
+        { id: "3", name: "Combat only", signedUpCombatTrialHrid: "badger", signupWeekStartAt: currentWeek },
+        { id: "4", name: "Unsigned" },
+        { id: "5", name: "Last week", signedUpSkillingTrialHrid: "cook", signupWeekStartAt: previousWeek },
+    ];
+    const profiles = {
+        1: { id: "1", skills: [{ skillHrid: "/skills/cooking", level: 130 }, { skillHrid: "/skills/foraging", level: 131 }] },
+        2: { id: "2", skills: [{ skillHrid: "/skills/cooking", level: 140 }, { skillHrid: "/skills/foraging", level: 135 }] },
+        3: { id: "3", skills: [{ skillHrid: "/skills/cooking", level: 135 }, { skillHrid: "/skills/foraging", level: 151 }] },
+        4: { id: "4", skills: [{ skillHrid: "/skills/cooking", level: 125 }, { skillHrid: "/skills/foraging", level: 150 }] },
+        5: { id: "5", skills: [{ skillHrid: "/skills/cooking", level: 160 }, { skillHrid: "/skills/mining", level: 160 }] },
+    };
+    const analysis = Core.analyzeTrials({
+        aggregate: Core.aggregateGuild(roster, profiles),
+        weeklyTrialSet: { skillHrids: ["cook", "forage"], combatHrids: ["badger"] },
+        trialDetails: {
+            cook: { skillHrid: "/skills/cooking" },
+            forage: { skillHrid: "/skills/foraging" },
+            badger: { kind: "combat", name: "Badger" },
+        },
+        guildWeekStartAt: currentWeek,
+        now: currentWeek + Core.DAY_MS,
+    });
+    const gapNames = (skillHrid) => analysis.highLevelSkillGaps.find((gap) => gap.skillHrid === skillHrid)?.members.map((member) => member.memberName);
+
+    assert.deepEqual(gapNames("/skills/cooking"), ["Last week", "Combat only"]);
+    assert.deepEqual(gapNames("/skills/foraging"), ["Combat only", "Unsigned"]);
+    assert.equal(gapNames("/skills/mining"), undefined);
 });
 
 test("balances skilling recommendations while respecting minimum levels", () => {
