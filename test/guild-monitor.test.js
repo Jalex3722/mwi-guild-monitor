@@ -953,6 +953,31 @@ test("ranks guild-credit conversions and prices shrine levels", () => {
     assert.equal(force.levels[1].cumulativeCost, 1090);
 });
 
+test("compares an icon goal's credit exchange with the cheapest priced item", () => {
+    const itemDetails = {
+        "/items/apple": { name: "Apple", guildCreditConversions: [{ creditItemHrid: "/items/green_credit", itemCount: 10, creditCount: 5 }] },
+        "/items/log": { name: "Log", guildCreditConversions: [{ creditItemHrid: "/items/green_credit", itemCount: 4, creditCount: 4 }] },
+        "/items/unpriced": { name: "Unpriced", guildCreditConversions: [{ creditItemHrid: "/items/green_credit", itemCount: 2, creditCount: 1 }] },
+        "/items/green_credit": { name: "Green Guild Credit" },
+    };
+    const marketData = { marketData: {
+        "/items/apple": { 0: { a: 20 } },
+        "/items/log": { 0: { a: 30 } },
+    } };
+    const analyze = (iconTargetItemHrid) => Core.analyzeGuildEconomy({ itemDetails, marketData, iconTargetItemHrid });
+
+    const target = analyze("/items/apple").iconTarget;
+    assert.equal(target.option.itemCount, 10);
+    assert.equal(target.option.creditCount, 5);
+    assert.equal(target.option.costPerCredit, 40);
+    assert.equal(target.bestOption.itemName, "Log");
+    assert.equal(target.extraCoinsPerCredit, 10);
+    assert.ok(Math.abs(target.extraPercent - 100 / 3) < 0.001);
+    assert.equal(analyze("/items/log").iconTarget.extraCoinsPerCredit, 0);
+    assert.equal(analyze("/items/unpriced").iconTarget.extraCoinsPerCredit, null);
+    assert.equal(analyze("/items/missing").iconTarget, null);
+});
+
 test("uses ask, fair, then bid prices and leaves unknown shrine costs unpriced", () => {
     const marketData = { marketData: {
         "/items/ask": { 0: { a: 40, p: 35, b: 30 } },

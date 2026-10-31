@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.10.2
+// @version      0.11.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -600,6 +600,7 @@
         guildBuffLevels = {},
         marketData = {},
         marketItemValues = {},
+        iconTargetItemHrid = "",
     } = {}) {
         const creditGroups = new Map();
         const guildTokenRoutes = [];
@@ -650,6 +651,21 @@
             });
             return { ...group, bestOption: group.options.find((option) => option.available) || null };
         }).sort((left, right) => left.creditName.localeCompare(right.creditName));
+
+        const iconCredit = credits.find((credit) => credit.options.some((option) => option.itemHrid === iconTargetItemHrid));
+        const iconOption = iconCredit?.options.find((option) => option.itemHrid === iconTargetItemHrid);
+        const bestIconOption = iconCredit?.bestOption;
+        const extraCoinsPerCredit = Number.isFinite(iconOption?.costPerCredit) && Number.isFinite(bestIconOption?.costPerCredit)
+            ? Math.max(0, iconOption.costPerCredit - bestIconOption.costPerCredit) : null;
+        const iconTarget = iconOption ? {
+            creditHrid: iconCredit.creditHrid,
+            creditName: iconCredit.creditName,
+            option: iconOption,
+            bestOption: bestIconOption,
+            extraCoinsPerCredit,
+            extraPercent: extraCoinsPerCredit !== null && bestIconOption.costPerCredit > 0
+                ? extraCoinsPerCredit / bestIconOption.costPerCredit * 100 : null,
+        } : null;
 
         const creditValues = Object.fromEntries(credits.map((group) => [group.creditHrid, group.bestOption ? group.bestOption.costPerCredit : null]));
         const valuedTokenRoutes = guildTokenRoutes.map((route) => {
@@ -737,6 +753,7 @@
 
         return {
             credits,
+            iconTarget,
             creditValues,
             guildTokenRoutes: valuedTokenRoutes,
             guildTokenValue,
@@ -1429,7 +1446,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.10.2";
+    const SCRIPT_VERSION = "0.11.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1609,6 +1626,7 @@ function startGuildMonitor(Core) {
             profiles: previous.profiles || {},
             snapshots: Array.isArray(previous.snapshots) ? previous.snapshots : [],
             auraAssignments: previous.auraAssignments || {},
+            iconTargetItemHrid: typeof previous.iconTargetItemHrid === "string" ? previous.iconTargetItemHrid : "",
             trialHistory: previous.trialHistory || {},
             trialPlans: previous.trialPlans || {},
             guildPointsHistory: Array.isArray(previous.guildPointsHistory) ? previous.guildPointsHistory : [],
@@ -1680,6 +1698,15 @@ function startGuildMonitor(Core) {
         writeStore(store);
         state.guildStore = store.guilds[key];
         state.trialRevision += 1;
+    }
+
+    function setIconTargetItem(itemHrid) {
+        if (!state.guild) return;
+        if (itemHrid && !currentGuildEconomy().credits.some((credit) => credit.options.some((option) => option.itemHrid === itemHrid))) return;
+        const { store, key } = ensureGuildStore();
+        store.guilds[key].iconTargetItemHrid = itemHrid;
+        writeStore(store);
+        state.guildStore = store.guilds[key];
     }
 
     function saveProfile(profile) {
@@ -1983,6 +2010,17 @@ function startGuildMonitor(Core) {
             .mwigm-shrine-table-scroll { max-width: 100%; overflow-x: auto; }
             .mwigm-price-source { color: #8fa0b7; font-size: 10px; text-transform: uppercase; }
             .mwigm-price-best { color: #77d2b2; }
+            .mwigm-icon-target-control { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+            .mwigm-icon-target-control label { color: #c4d0df; font-size: 12px; font-weight: 650; }
+            .mwigm-icon-target-control .mwigm-select { flex: 1; max-width: 340px; }
+            .mwigm-icon-target-summary { display: grid; grid-template-columns: 1.1fr 1.2fr 1.4fr .8fr .9fr 1.5fr; border-top: 1px solid #31415c; border-bottom: 1px solid #31415c; }
+            .mwigm-icon-target-field { min-width: 0; padding: 9px 10px; border-right: 1px solid #31415c; overflow-wrap: anywhere; }
+            .mwigm-icon-target-field:last-child { border-right: 0; }
+            .mwigm-icon-target-field > span { display: block; color: #92a2b9; font-size: 10px; }
+            .mwigm-icon-target-field > strong, .mwigm-icon-target-value { display: block; margin-top: 4px; color: #f5f8fc; font-size: 12px; font-weight: 650; }
+            .mwigm-icon-target-value .mwigm-subtext { display: block; font-size: 10px; font-weight: 400; }
+            .mwigm-icon-target-value .mwigm-price-source { display: block; }
+            .mwigm-icon-target-empty { padding: 13px 12px; border-top: 1px solid #31415c; border-bottom: 1px solid #31415c; color: #9eafc2; }
             .mwigm-purchased { color: #77d2b2; }
             .mwigm-footer { padding: 8px 12px; color: #8190a6; font-size: 11px; border-top: 1px solid #31415c; }
             @media (max-width: 620px) {
@@ -1992,6 +2030,9 @@ function startGuildMonitor(Core) {
                 .mwigm-metric:nth-child(-n+2) { border-bottom: 1px solid #31415c; }
                 .mwigm-toolbar { flex-wrap: wrap; }
                 .mwigm-input { flex-basis: 100%; }
+                .mwigm-icon-target-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .mwigm-icon-target-field:nth-child(even) { border-right: 0; }
+                .mwigm-icon-target-field:nth-child(-n+4) { border-bottom: 1px solid #31415c; }
                 .mwigm-skill-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
                 .mwigm-skill-primary { grid-column: 1 / -1; }
                 .mwigm-skill-gap { grid-column: span 2; text-align: left; }
@@ -2097,6 +2138,7 @@ function startGuildMonitor(Core) {
             guildBuffLevels: state.guildBuffLevels,
             marketData: state.marketData,
             marketItemValues: state.marketItemValues,
+            iconTargetItemHrid: state.guildStore ? state.guildStore.iconTargetItemHrid : "",
         });
     }
 
@@ -2580,6 +2622,34 @@ function startGuildMonitor(Core) {
             : "";
         const errorNotice = state.marketError ? `<div class="mwigm-notice"><strong>Market update failed:</strong> ${escapeHtml(state.marketError)} Cached prices remain in use when available.</div>` : "";
         const sourceNotice = `<div class="mwigm-notice mwigm-notice-info">Conversion rankings use the official market feed. Current asks are preferred; rows marked Fair or Bid are estimates because no ask was available. Rankings do not model order-book depth. Guild-token value uses its most valuable credit conversion, so shrine totals represent opportunity cost rather than a direct token purchase price.</div>`;
+        const selectedIconItemHrid = state.guildStore ? state.guildStore.iconTargetItemHrid : "";
+        const seenIconItems = new Set();
+        const iconChoices = economy.credits.map((credit) => {
+            const options = [...credit.options].sort((left, right) => left.itemName.localeCompare(right.itemName))
+                .filter((option) => {
+                    if (seenIconItems.has(option.itemHrid)) return false;
+                    seenIconItems.add(option.itemHrid);
+                    return true;
+                })
+                .map((option) => `<option value="${escapeHtml(option.itemHrid)}"${option.itemHrid === selectedIconItemHrid ? " selected" : ""}>${escapeHtml(option.itemName)}</option>`).join("");
+            return options ? `<optgroup label="${escapeHtml(credit.creditName)}">${options}</optgroup>` : "";
+        }).join("");
+        const missingIconChoice = selectedIconItemHrid && !economy.iconTarget
+            ? `<option value="${escapeHtml(selectedIconItemHrid)}" selected>Saved item unavailable</option>` : "";
+        const iconTarget = economy.iconTarget;
+        const iconComparison = iconTarget && Number.isFinite(iconTarget.extraCoinsPerCredit)
+            ? iconTarget.extraCoinsPerCredit === 0
+                ? `<span class="mwigm-up">Optimal</span>`
+                : `+${formatCoins(iconTarget.extraCoinsPerCredit)} coins/credit<span class="mwigm-subtext">+${iconTarget.extraPercent.toFixed(1)}% vs ${escapeHtml(iconTarget.bestOption.itemName)}</span>`
+            : "Price unavailable";
+        const iconSummary = iconTarget ? `<div class="mwigm-icon-target-summary">
+            <div class="mwigm-icon-target-field"><span>Item</span><strong>${escapeHtml(iconTarget.option.itemName)}</strong></div>
+            <div class="mwigm-icon-target-field"><span>Guild credit</span><strong>${escapeHtml(iconTarget.creditName)}</strong></div>
+            <div class="mwigm-icon-target-field"><span>Conversion</span><strong>${formatExactNumber(iconTarget.option.itemCount)} items → ${formatExactNumber(iconTarget.option.creditCount)} credits</strong></div>
+            <div class="mwigm-icon-target-field"><span>Price per item</span><div class="mwigm-icon-target-value">${iconTarget.option.available ? `${formatCoins(iconTarget.option.unitPrice)}<span class="mwigm-price-source">${escapeHtml(iconTarget.option.source)}</span>` : "--"}</div></div>
+            <div class="mwigm-icon-target-field"><span>Coins per credit</span><strong>${iconTarget.option.available ? formatCoins(iconTarget.option.costPerCredit) : "--"}</strong></div>
+            <div class="mwigm-icon-target-field"><span>Vs best priced</span><div class="mwigm-icon-target-value">${iconComparison}</div></div>
+        </div>` : `<div class="mwigm-icon-target-empty">${selectedIconItemHrid ? "Selected item unavailable in current game definitions" : "Select an icon goal item"}</div>`;
         const creditRows = economy.credits.filter((credit) =>
             credit.creditName.toLocaleLowerCase().includes(query) || credit.options.some((option) => option.itemName.toLocaleLowerCase().includes(query)),
         ).map((credit) => {
@@ -2639,10 +2709,13 @@ function startGuildMonitor(Core) {
             ${overview}
             ${definitionNotice}
             ${errorNotice}
-            ${checkedNotice}
-            ${sourceNotice}
+            <div class="mwigm-section-title">Guild icon contribution <span>Selected item for this guild</span></div>
+            <div class="mwigm-icon-target-control"><label for="mwigm-icon-target">Icon goal</label><select class="mwigm-select" id="mwigm-icon-target" data-control="icon-target" ${iconChoices ? "" : "disabled"}><option value=""${selectedIconItemHrid ? "" : " selected"}>Select item</option>${missingIconChoice}${iconChoices}</select></div>
+            ${iconSummary}
             <div class="mwigm-section-title">Optimal credit conversions <span>Lowest estimated coins per guild credit</span></div>
             <table class="mwigm-table mwigm-economy-table"><thead><tr><th style="width:19%">Guild credit</th><th>Best item</th><th>Exchange</th><th>Price per item</th><th>Coins per credit</th><th>Next options</th></tr></thead><tbody>${creditRows || emptyTableRow(6)}</tbody></table>
+            ${checkedNotice}
+            ${sourceNotice}
             <div class="mwigm-section-title">Shrine level estimates <span>Incremental and cumulative opportunity cost</span></div>
             ${shrineSections || (economy.shrineGroups.length
                 ? emptyState("No matching shrine levels", "Try another shrine or credit name.")
@@ -2848,6 +2921,11 @@ function startGuildMonitor(Core) {
     function handlePanelInput(event) {
         if (event.target.dataset.auraMemberId) {
             setAuraAssignment(event.target.dataset.auraMemberId, event.target.value);
+            render();
+            return;
+        }
+        if (event.target.dataset.control === "icon-target") {
+            setIconTargetItem(event.target.value);
             render();
             return;
         }
