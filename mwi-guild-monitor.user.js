@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.0
+// @version      0.11.1
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1446,7 +1446,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.0";
+    const SCRIPT_VERSION = "0.11.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1926,8 +1926,9 @@ function startGuildMonitor(Core) {
             .mwigm-command:hover { background: #263a5d; }
             .mwigm-command-primary { border-color: #4c9b82; background: #17634f; }
             .mwigm-command-primary:hover { background: #1d775f; }
-            .mwigm-profile-button { height: 26px; padding: 3px 8px; font-size: 11px; }
-            .mwigm-missing-member-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+            .mwigm-profile-button { flex: 0 0 auto; height: 26px; padding: 3px 8px; font-size: 11px; }
+            .mwigm-missing-member-heading { display: flex; align-items: center; gap: 6px; width: 100%; }
+            .mwigm-missing-member-heading .mwigm-member-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
             .mwigm-content { min-height: 0; flex: 1; overflow: auto; }
             .mwigm-table { width: 100%; min-width: 680px; border-collapse: collapse; table-layout: fixed; }
             .mwigm-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: #1c293b; color: #c4d0df; font-weight: 600; text-align: right; border-bottom: 1px solid #52637c; white-space: normal; }
