@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.1
+// @version      0.11.2
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1049,20 +1049,6 @@
         const targetCoveredTrialCount = optimalDistribution.filter((trial) => Number.isFinite(trial.targetAverageLevel)).length;
         const combinedTargetAverage = targetCoveredTrialCount === skilling.length && skilling.length
             ? optimalDistribution.reduce((sum, trial) => sum + trial.targetAverageLevel, 0) : null;
-        const highLevelSkillGaps = skilling.map((trial) => ({
-            trialHrid: trial.trialHrid,
-            trialName: trial.name,
-            skillHrid: trial.skillHrid,
-            members: currentMembers
-                .map((member) => ({
-                    memberId: member.id,
-                    memberName: member.name,
-                    level: getProfileSkillLevel(member, trial.skillHrid),
-                    currentSkillingTrialHrid: member.currentSkillingTrialHrid,
-                }))
-                .filter((member) => Number.isFinite(member.level) && member.level > 125 && !member.currentSkillingTrialHrid)
-                .sort((left, right) => right.level - left.level || left.memberName.localeCompare(right.memberName)),
-        }));
         const auraTracking = currentMembers
             .filter((member) => member.desiredAuraHrid)
             .map((member) => {
@@ -1097,7 +1083,6 @@
             targetCoveredTrialCount,
             combinedTargetAverage,
             allocationBalanced: optimalDistribution.length < 2 || Math.max(...optimalDistribution.map((trial) => trial.assignments.length)) - Math.min(...optimalDistribution.map((trial) => trial.assignments.length)) <= 1,
-            highLevelSkillGaps,
             auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
             combatSignedCount: currentMembers.filter((member) => member.currentCombatTrialHrid).length,
@@ -1446,7 +1431,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.1";
+    const SCRIPT_VERSION = "0.11.2";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1944,9 +1929,8 @@ function startGuildMonitor(Core) {
             .mwigm-building-costs summary { cursor: pointer; width: max-content; color: #77d2b2; }
             .mwigm-building-costs summary:focus-visible { outline: 2px solid #77d2b2; }
             .mwigm-building-cost-list { display: block; margin: 5px 0 0 15px; line-height: 1.5; }
-            .mwigm-skill-gap { color: #efbd70; }
             .mwigm-skill-list { border-top: 1px solid #31415c; }
-            .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(3, minmax(58px, .5fr)) minmax(170px, 1.35fr) minmax(62px, .5fr); border-bottom: 1px solid #2b3a53; }
+            .mwigm-skill-row { display: grid; grid-template-columns: minmax(190px, 1.6fr) repeat(4, minmax(58px, .5fr)); border-bottom: 1px solid #2b3a53; }
             .mwigm-skill-primary, .mwigm-skill-stat { min-width: 0; padding: 9px 10px; }
             .mwigm-skill-primary { display: flex; flex-direction: column; justify-content: center; }
             .mwigm-skill-primary span { color: #92a2b9; font-size: 11px; white-space: normal; }
@@ -2034,9 +2018,8 @@ function startGuildMonitor(Core) {
                 .mwigm-icon-target-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .mwigm-icon-target-field:nth-child(even) { border-right: 0; }
                 .mwigm-icon-target-field:nth-child(-n+4) { border-bottom: 1px solid #31415c; }
-                .mwigm-skill-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                .mwigm-skill-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
                 .mwigm-skill-primary { grid-column: 1 / -1; }
-                .mwigm-skill-gap { grid-column: span 2; text-align: left; }
                 .mwigm-aura-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .mwigm-aura-summary { border-bottom: 1px solid #31415c; }
                 .mwigm-aura-table { min-width: 0; }
@@ -2243,14 +2226,11 @@ function startGuildMonitor(Core) {
         }
 
         const previous = Core.getPreviousSnapshot(state.guildStore ? state.guildStore.snapshots : []);
-        const analysis = currentTrialAnalysis(aggregate);
-        const gapBySkill = new Map(analysis.highLevelSkillGaps.map((gap) => [gap.skillHrid, gap]));
         const query = state.query.toLocaleLowerCase();
         let skills = aggregate.skills.filter((skill) => {
-            const gap = gapBySkill.get(skill.skillHrid);
             const memberNames = [
                 ...skill.maxMembers,
-                ...(gap ? gap.members.map((member) => member.memberName) : []),
+                ...(skill.thresholdCounts[125]?.members.map((member) => member.memberName) || []),
             ].join(" ").toLocaleLowerCase();
             return skill.name.toLocaleLowerCase().includes(query) || memberNames.includes(query);
         });
@@ -2265,17 +2245,6 @@ function startGuildMonitor(Core) {
                 const names = summary.members.map((member) => `${member.memberName} (${member.level})`).join(", ") || "No members";
                 return `<div class="mwigm-skill-stat" title="${escapeHtml(names)}"><span>Over ${threshold}</span><strong>${summary.count}</strong></div>`;
             };
-            const gap = gapBySkill.get(skill.skillHrid);
-            const gapNames = gap ? gap.members.map((member) => `${member.memberName} (${member.level})`) : [];
-            const gapStat = skill.skillHrid === Core.TOTAL_LEVEL_HRID
-                ? `<div class="mwigm-skill-stat"><span>Trial</span><strong class="mwigm-muted">--</strong></div>`
-                : !gap
-                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="This skill is not offered in the current weekly trial set"><span>Over 125, no skilling signup</span><strong class="mwigm-muted">N/A</strong></div>`
-                : gapNames.length
-                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="${escapeHtml(gapNames.join(", "))}"><span>Over 125, no skilling signup</span><strong>${gapNames.length}</strong><span class="mwigm-subtext">${escapeHtml(gapNames.join(", "))}</span></div>`
-                : skill.thresholdCounts[125].count === 0
-                ? `<div class="mwigm-skill-stat mwigm-skill-gap" title="No captured member is above level 125 in this skill"><span>Over 125, no skilling signup</span><strong class="mwigm-muted">No one over 125</strong></div>`
-                : `<div class="mwigm-skill-stat mwigm-skill-gap" title="Every captured member above level 125 has a current skilling signup"><span>Over 125, no skilling signup</span><strong class="mwigm-up">All signed up</strong></div>`;
             return `
                 <div class="mwigm-skill-row" title="Minimum: ${escapeHtml(skill.minMembers.join(", "))}">
                     <div class="mwigm-skill-primary">
@@ -2284,7 +2253,6 @@ function startGuildMonitor(Core) {
                         <span title="${escapeHtml(maxNames)}">Highest ${skill.maxLevel} · ${escapeHtml(maxNames)}</span>
                     </div>
                     ${thresholds.map(thresholdStat).join("")}
-                    ${gapStat}
                     <div class="mwigm-skill-stat"><span>Change</span><strong class="${delta !== null && delta > 0 ? "mwigm-up" : "mwigm-muted"}">${formatDelta(delta)}</strong></div>
                 </div>
             `;
