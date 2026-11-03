@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.2
+// @version      0.11.3
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1431,7 +1431,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.2";
+    const SCRIPT_VERSION = "0.11.3";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1611,6 +1611,7 @@ function startGuildMonitor(Core) {
             profiles: previous.profiles || {},
             snapshots: Array.isArray(previous.snapshots) ? previous.snapshots : [],
             auraAssignments: previous.auraAssignments || {},
+            auraMinCombatLevel: Number.isSafeInteger(previous.auraMinCombatLevel) && previous.auraMinCombatLevel >= 0 ? previous.auraMinCombatLevel : 100,
             iconTargetItemHrid: typeof previous.iconTargetItemHrid === "string" ? previous.iconTargetItemHrid : "",
             trialHistory: previous.trialHistory || {},
             trialPlans: previous.trialPlans || {},
@@ -1683,6 +1684,16 @@ function startGuildMonitor(Core) {
         writeStore(store);
         state.guildStore = store.guilds[key];
         state.trialRevision += 1;
+    }
+
+    function setAuraMinCombatLevel(value) {
+        if (!state.guild || !/^\d+$/.test(value)) return;
+        const level = Number(value);
+        if (!Number.isSafeInteger(level)) return;
+        const { store, key } = ensureGuildStore();
+        store.guilds[key].auraMinCombatLevel = level;
+        writeStore(store);
+        state.guildStore = store.guilds[key];
     }
 
     function setIconTargetItem(itemHrid) {
@@ -1977,6 +1988,10 @@ function startGuildMonitor(Core) {
             .mwigm-aura-summary:last-child { border-right: 0; }
             .mwigm-aura-summary strong { display: block; color: #f5f8fc; }
             .mwigm-aura-summary span { color: #8fa0b7; font-size: 10px; }
+            .mwigm-aura-filter { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #31415c; }
+            .mwigm-aura-filter label { color: #c4d0df; font-size: 12px; font-weight: 650; }
+            .mwigm-aura-filter input { width: 72px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
+            .mwigm-aura-filter span { color: #8fa0b7; font-size: 11px; }
             .mwigm-aura-select { width: 100%; min-width: 110px; height: 30px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 4px 7px; }
             .mwigm-aura-table, .mwigm-aura-coverage { min-width: 760px; }
             .mwigm-utility-coverage { min-width: 520px; }
@@ -2501,15 +2516,20 @@ function startGuildMonitor(Core) {
     function renderAuras(aggregate) {
         const analysis = currentTrialAnalysis(aggregate);
         const assignments = state.guildStore ? state.guildStore.auraAssignments : {};
+        const minimumCombatLevel = state.guildStore ? state.guildStore.auraMinCombatLevel : 100;
+        const eligibleMembers = aggregate.members.filter((member) => {
+            const combatLevel = Core.getProfileSkillLevel(member, "/skills/combat");
+            return Number.isFinite(combatLevel) && combatLevel >= minimumCombatLevel;
+        });
         const query = state.query.toLocaleLowerCase();
         const effectiveAssignment = (member) => Core.getEffectiveAuraAssignment(assignments, member);
         const countsFor = (definitions) => definitions.map((ability) => ({
             ...ability,
-            count: aggregate.members.filter((member) => effectiveAssignment(member) === ability.hrid).length,
+            count: eligibleMembers.filter((member) => effectiveAssignment(member) === ability.hrid).length,
         }));
         const auraCounts = countsFor(Core.AURA_DEFINITIONS);
         const utilityCounts = countsFor(Core.UTILITY_DEFINITIONS);
-        let members = aggregate.members.filter((member) => {
+        let members = eligibleMembers.filter((member) => {
             const ability = Core.getSpecialAbilityDefinition(effectiveAssignment(member));
             return member.name.toLocaleLowerCase().includes(query) || (ability && ability.name.toLocaleLowerCase().includes(query));
         });
@@ -2561,9 +2581,14 @@ function startGuildMonitor(Core) {
         }).join("");
 
         return `
+            <div class="mwigm-aura-filter">
+                <label for="${SCRIPT_ID}-aura-min-combat">Minimum Combat level</label>
+                <input id="${SCRIPT_ID}-aura-min-combat" data-control="aura-min-combat" type="number" min="0" step="1" value="${minimumCombatLevel}" aria-label="Minimum Combat level to show in Auras">
+                <span>${eligibleMembers.length} of ${aggregate.memberCount} members meet the minimum with a captured Combat level</span>
+            </div>
             ${summary}
             <div class="mwigm-notice mwigm-notice-info">Automatic: Insanity at captured Combat level 110+, Revive below 110. Missing Combat level stays unassigned. Manual selections override the default; these are planning labels, not verified loadouts.</div>
-            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired special</th><th>Skill level</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || emptyTableRow(5)}</tbody></table>
+            <table class="mwigm-table mwigm-aura-table"><thead><tr><th style="width:24%">Member</th><th style="width:25%">Desired special</th><th>Skill level</th><th>Combat trial</th><th>Status</th></tr></thead><tbody>${rows || `<tr><td class="mwigm-no-results" colspan="5">${query ? "No matching members" : "No members meet the minimum Combat level"}</td></tr>`}</tbody></table>
         `;
     }
 
@@ -2888,6 +2913,13 @@ function startGuildMonitor(Core) {
     }
 
     function handlePanelInput(event) {
+        if (event.target.dataset.control === "aura-min-combat") {
+            if (event.type === "change") {
+                setAuraMinCombatLevel(event.target.value);
+                render();
+            }
+            return;
+        }
         if (event.target.dataset.auraMemberId) {
             setAuraAssignment(event.target.dataset.auraMemberId, event.target.value);
             render();

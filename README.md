@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.11.2`.
+The monitor header displays its running version. The current release is `v0.11.3`.
 
 ## Collecting member skill data
 
@@ -119,6 +119,8 @@ Open the **Auras** tab to designate one special ability per guild member. The ch
 - Revive
 
 When a captured profile has a Combat level, the default is **Insanity** at level 110 or higher and **Revive** below 110. Without a captured Combat level, the member stays unassigned. These defaults follow updated profiles and appear in the Auras, Members, Trials, and CSV views. A manual selection, including **No special assigned**, overrides the default; choose **Auto** to restore it.
+
+The Auras tab shows only members whose captured Combat level meets the **Minimum Combat level** setting, which defaults to 100 and is saved per guild. Members without a captured Combat level are hidden from this tab until their profile is viewed. The ability totals follow this filter; trial coverage, assignments, and exports still include the full guild roster.
 
 The assignment table shows a captured scaling-skill level for auras or Combat level for utility abilities, plus the member's current combat-trial signup. The Trials tab evaluates each combat roster independently. An aura is **covered** when exactly one designated player is signed up for that trial, **missing** when nobody is designated, and **duplicate** when two or more designated players for that aura are in the same trial. Insanity and Revive are listed separately with their assigned player names and counts; multiple users are allowed and they do not affect aura coverage.
 
