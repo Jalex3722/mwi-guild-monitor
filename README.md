@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.11.3`.
+The monitor header displays its running version. The current release is `v0.11.4`.
 
 ## Collecting member skill data
 
@@ -98,7 +98,7 @@ The script keeps a rolling local ledger of the latest signup state it observed f
 
 ## Guild Points, buildings, and leaderboards
 
-The **Guild** tab shows available and lifetime Guild Points from the current guild state, this week's observed trial points, and the latest ten Guild Point balance changes captured by this browser. It lists all building and shrine levels known to the game client. Next-upgrade costs, affordability gaps, total cost to max level, and expandable per-level Guild Point costs use the game's building and shrine definitions. Unknown costs remain blank rather than estimated.
+The **Guild** tab shows available and lifetime Guild Points from the current guild state and this week's observed trial points. It lists all building and shrine levels known to the game client. Next-upgrade costs, affordability gaps, total cost to max level, and expandable per-level Guild Point costs use the game's building and shrine definitions. Unknown costs remain blank rather than estimated.
 
 Shrines use the game's display order in both Guild and Shrines views: Force, Tempo, Spirit, Rarity, Scholar. The Guild tab's level and next-cost sorts can temporarily reorder them when selected.
 

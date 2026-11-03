@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.3
+// @version      0.11.4
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1431,7 +1431,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.3";
+    const SCRIPT_VERSION = "0.11.4";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2348,7 +2348,6 @@ function startGuildMonitor(Core) {
 
     function renderGuild() {
         const structures = Core.analyzeGuildStructures(state.guild, state.guildBuildingLevels, state.guildBuildingDetails, state.guildShrineDetails);
-        const history = state.guildStore && Array.isArray(state.guildStore.guildPointsHistory) ? state.guildStore.guildPointsHistory : [];
         const leaderboards = Core.getGuildLeaderboardSpots(state.guildStore ? state.guildStore.leaderboards : {});
         const currentTrials = Core.parseJsonObject(state.guild.currentTrialsData);
         const trialPoints = Object.values(Core.asObject(currentTrials.points)).map(Number).filter(Number.isFinite);
@@ -2358,11 +2357,6 @@ function startGuildMonitor(Core) {
             const filters = String(board.filter || "").split(":").filter((value) => value && value !== "all").map(Core.prettifyHrid).join(" · ") || "All";
             return `<tr><td>${escapeHtml(leaderboardName(board.category))}</td><td><strong>#${board.guildRank}</strong></td><td>${escapeHtml(filters)}</td><td class="mwigm-muted" title="${escapeHtml(new Date(board.observedAt).toLocaleString())}">${escapeHtml(formatRelativeTime(board.observedAt))}</td></tr>`;
         }).join("");
-        const historyRows = history.slice(-10).reverse().map((entry) => `<tr>
-            <td>${entry.available === null ? "--" : formatExactNumber(entry.available)}</td>
-            <td>${entry.lifetime === null ? "--" : formatExactNumber(entry.lifetime)}</td>
-            <td class="mwigm-muted">${escapeHtml(new Date(entry.observedAt).toLocaleString())}</td>
-        </tr>`).join("");
         const query = state.query.toLocaleLowerCase();
         const structureTable = (label, entries, preserveOrder = false) => {
             let rows = entries.filter((entry) => entry.name.toLocaleLowerCase().includes(query));
@@ -2392,8 +2386,6 @@ function startGuildMonitor(Core) {
             </div>
             <div class="mwigm-section-title">Guild leaderboard <span>Last observed positions</span></div>
             ${rankRows ? `<table class="mwigm-table"><thead><tr><th>Category</th><th>Rank</th><th>Filter</th><th>Seen</th></tr></thead><tbody>${rankRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">Open a Guilds leaderboard category in the game to capture its rank. The monitor does not request boards automatically.</div>`}
-            <div class="mwigm-section-title">Guild Points history <span>Changes observed in this browser</span></div>
-            ${historyRows ? `<table class="mwigm-table"><thead><tr><th>Available GP</th><th>Lifetime GP</th><th>Seen</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">No Guild Point totals have been observed yet.</div>`}
             ${!Object.keys(state.guildBuildingDetails).length && !Object.keys(state.guildShrineDetails).length ? `<div class="mwigm-notice mwigm-notice-info">Building costs need the game's client definitions. Reload after enabling the script or open the Guild panel.</div>` : ""}
             ${structureTable("Buildings", structures.buildings, true)}
             ${structureTable("Shrines", structures.shrines, true)}
