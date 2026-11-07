@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.4
+// @version      0.11.5
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1431,7 +1431,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.4";
+    const SCRIPT_VERSION = "0.11.5";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2309,6 +2309,10 @@ function startGuildMonitor(Core) {
             const signedCombat = currentSignup && Boolean(member.signedUpCombatTrialHrid);
             const skillingTrial = signedSkilling ? Core.getTrialName(member.signedUpSkillingTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
             const combatTrial = signedCombat ? Core.getTrialName(member.signedUpCombatTrialHrid, state.guildTrialDetails, state.skillDetails) : "None";
+            const combatLevel = Core.getProfileSkillLevel(member, "/skills/combat");
+            const belowCombat100 = Number.isFinite(combatLevel) && combatLevel < 100;
+            const belowCombatLabel = belowCombat100 ? `Combat level <100 (Lv ${combatLevel})` : "";
+            const combatDisplay = signedCombat ? combatTrial : belowCombat100 ? belowCombatLabel : "None";
             const activity = member.isOnline
                 ? "Online"
                 : member.hideOnlineStatus
@@ -2332,7 +2336,7 @@ function startGuildMonitor(Core) {
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
-                    <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span><span class="${signedSkilling ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(skillingTrial)}</span><br><span class="mwigm-trial-type">Combat</span><span class="${signedCombat ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(combatTrial)}</span></td>
+                    <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${belowCombat100 ? ` · Captured ${escapeHtml(belowCombatLabel)}` : ""}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span><span class="${signedSkilling ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(skillingTrial)}</span><br><span class="mwigm-trial-type">Combat</span><span class="${signedCombat || belowCombat100 ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(combatDisplay)}</span>${signedCombat && belowCombat100 ? `<span class="mwigm-subtext mwigm-roster-names">${escapeHtml(belowCombatLabel)}</span>` : ""}</td>
                     <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span></td>
                 </tr>
             `;

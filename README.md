@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.11.4`.
+The monitor header displays its running version. The current release is `v0.11.5`.
 
 ## Collecting member skill data
 
@@ -71,7 +71,7 @@ Select **Snapshot** to save the current aggregate locally. The `Change` column c
 
 The **Members** tab places each captured member's first and second median-fit trial choices beside their name. It also flags a player after a known offline duration reaches 72 hours. A hidden online status or unavailable timestamp is shown separately and is never treated as a 3-day absence.
 
-In the **Current trials** column, green text and a green dot mean the member is signed up for that skilling or combat trial this week. Red **None** means no current signup in that category. The **Missing profiles** tab lists the full roster, with profiles still needed first, and shows when this browser last captured each available profile (both relative time and local date/time). It does not reconstruct profiles viewed before the monitor was installed.
+In the **Current trials** column, green text and a green dot normally mean the member is signed up for that skilling or combat trial this week. An unsigned member with a captured Combat level below 100 instead shows a green **Combat level <100** label; this is a level-based indicator, not a recorded signup. A signed member below 100 keeps the trial name and also shows the level note. Red **None** means no current signup in that category when this exception does not apply. The **Missing profiles** tab lists the full roster, with profiles still needed first, and shows when this browser last captured each available profile (both relative time and local date/time). It does not reconstruct profiles viewed before the monitor was installed.
 
 The first and second choices use `member level - captured guild median`. They highlight where a member is strongest relative to the guild, but do not model attendance, equipment, consumables, or roster quotas.
 
