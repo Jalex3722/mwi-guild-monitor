@@ -44,7 +44,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.11.5`.
+The monitor header displays its running version. The current release is `v0.11.6`.
 
 ## Collecting member skill data
 
@@ -90,7 +90,7 @@ The Trials tab displays actual signup rosters and signup-time levels when availa
 
 The Trials signup tables show current slots and remaining capacity. Each skilling trial has `20 + 2 × Skilling Encampment level` slots; each combat trial has `40 + 4 × Combat Encampment level` slots. Capacity is shown as unknown until the client supplies guild building levels.
 
-The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
+The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. Each week can be expanded or collapsed independently; the newest observed week opens by default. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
 
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.5
+// @version      0.11.6
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1431,7 +1431,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.5";
+    const SCRIPT_VERSION = "0.11.6";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1468,6 +1468,8 @@ function startGuildMonitor(Core) {
         renderQueued: false,
         trialRevision: 0,
         trialAnalysisCache: null,
+        expandedResultWeeks: new Set(),
+        seenLatestResultWeeks: new Set(),
         expandedShrines: new Set(),
         expandedBuildingCosts: new Set(),
     };
@@ -2002,6 +2004,11 @@ function startGuildMonitor(Core) {
             .mwigm-slot-fill { height: 100%; background: #68d5a9; }
             .mwigm-slot-fill[data-near="true"] { background: #efbd70; }
             .mwigm-shrine-table { min-width: 860px; }
+            .mwigm-result-week { border-bottom: 1px solid #35445b; }
+            .mwigm-result-week > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
+            .mwigm-result-week > summary:hover, .mwigm-result-week[open] > summary { background: #213348; }
+            .mwigm-result-week > summary:focus-visible { outline: 2px solid #68d5a9; outline-offset: -2px; }
+            .mwigm-result-summary-meta { margin-left: 8px; color: #aebdd0; font-size: 11px; font-weight: 400; }
             .mwigm-shrine-group { border-bottom: 1px solid #35445b; }
             .mwigm-shrine-group > summary { padding: 12px 14px; background: #172438; color: #f3f6fb; cursor: pointer; font-weight: 650; }
             .mwigm-shrine-group > summary:hover, .mwigm-shrine-group[open] > summary { background: #213348; }
@@ -2455,14 +2462,26 @@ function startGuildMonitor(Core) {
     function renderResults() {
         const history = Core.asObject(state.guildStore && state.guildStore.trialHistory);
         const query = state.query.toLocaleLowerCase();
-        const sections = Object.values(history)
+        const weeks = Object.values(history)
             .filter((week) => Number.isFinite(Number(week && week.weekStartAt)) && Object.keys(Core.asObject(week && week.results)).length)
-            .sort((left, right) => Number(right.weekStartAt) - Number(left.weekStartAt))
+            .sort((left, right) => Number(right.weekStartAt) - Number(left.weekStartAt));
+        if (weeks.length) {
+            const latestKey = `${guildKey()}:${Number(weeks[0].weekStartAt)}`;
+            if (!state.seenLatestResultWeeks.has(latestKey)) {
+                state.expandedResultWeeks.add(latestKey);
+                state.seenLatestResultWeeks.add(latestKey);
+            }
+        }
+        const sections = weeks
             .map((week) => {
                 const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(Number(week.weekStartAt)));
-                const rows = Object.entries(Core.asObject(week.results)).map(([hrid, result]) => {
+                const matchingResults = Object.entries(Core.asObject(week.results)).filter(([hrid]) => {
                     const name = Core.getTrialName(hrid, state.guildTrialDetails, state.skillDetails);
-                    if (!name.toLocaleLowerCase().includes(query) && !date.toLocaleLowerCase().includes(query)) return "";
+                    return name.toLocaleLowerCase().includes(query) || date.toLocaleLowerCase().includes(query);
+                });
+                if (!matchingResults.length) return "";
+                const rows = matchingResults.map(([hrid, result]) => {
+                    const name = Core.getTrialName(hrid, state.guildTrialDetails, state.skillDetails);
                     const tier = Number(result.highestTier);
                     const level = Number.isFinite(tier) && tier > 0 ? `Lv ${100 + 10 * (tier - 1)}` : "--";
                     const status = result.done ? "Completed" : result.status ? Core.prettifyHrid(result.status) : "Not observed";
@@ -2475,9 +2494,12 @@ function startGuildMonitor(Core) {
                         <td class="mwigm-muted">${result.observedAt ? escapeHtml(new Date(Number(result.observedAt)).toLocaleString()) : "--"}</td>
                     </tr>`;
                 }).join("");
-                if (!rows) return "";
-                return `<div class="mwigm-section-title">Week of ${escapeHtml(date)} <span>UTC week start</span></div>
-                    <table class="mwigm-table"><thead><tr><th>Trial</th><th>Status</th><th>Highest cleared</th><th>Points</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>`;
+                const weekKey = `${guildKey()}:${Number(week.weekStartAt)}`;
+                const open = query || state.expandedResultWeeks.has(weekKey) ? " open" : "";
+                return `<details class="mwigm-result-week"${open}>
+                    <summary data-action="toggle-result-week" data-week-key="${escapeHtml(weekKey)}">Week of ${escapeHtml(date)}<span class="mwigm-result-summary-meta">${matchingResults.length} trial${matchingResults.length === 1 ? "" : "s"} · UTC week start</span></summary>
+                    <table class="mwigm-table"><thead><tr><th>Trial</th><th>Status</th><th>Highest cleared</th><th>Points</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>
+                </details>`;
             }).filter(Boolean);
         return `<div class="mwigm-notice mwigm-notice-info">Results are saved only when this browser observes the game's trial state. Unobserved past weeks cannot be filled in retroactively.</div>${sections.join("") || emptyState("No observed trial results", "Open Guild > Trials while the game is active. Results will appear here as this browser sees them.")}`;
     }
@@ -2897,6 +2919,12 @@ function startGuildMonitor(Core) {
                 const group = control.dataset.shrineGroup;
                 if (control.parentElement.open) state.expandedShrines.delete(group);
                 else state.expandedShrines.add(group);
+                break;
+            }
+            case "toggle-result-week": {
+                const weekKey = control.dataset.weekKey;
+                if (control.parentElement.open) state.expandedResultWeeks.delete(weekKey);
+                else state.expandedResultWeeks.add(weekKey);
                 break;
             }
             case "toggle-building": {
