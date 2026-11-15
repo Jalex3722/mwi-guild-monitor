@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.6
+// @version      0.11.7
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -450,6 +450,17 @@
         return Object.fromEntries(Object.entries(normalizedHistory)
             .sort(([left], [right]) => Number(left) - Number(right))
             .slice(-12));
+    }
+
+    function getTrialResultPoints(result) {
+        if (!result || !result.status || result.status === "scheduled" || result.points === null || result.points === undefined || result.points === "") return null;
+        const points = Number(result.points);
+        return Number.isFinite(points) && points >= 0 ? points : null;
+    }
+
+    function getWeeklyTrialPointsTotal(results) {
+        const points = Object.values(asObject(results)).map(getTrialResultPoints).filter(Number.isFinite);
+        return points.length ? points.reduce((total, value) => total + value, 0) : null;
     }
 
     function getPreviousWeekTrialStatus(history, currentWeekStartAt, memberId) {
@@ -1390,6 +1401,8 @@
         compareSkillsByDisplayOrder,
         getPreviousSnapshot,
         getPreviousWeekTrialStatus,
+        getTrialResultPoints,
+        getWeeklyTrialPointsTotal,
         getProfileIdentity,
         getProfileSkillLevel,
         getAuraAssignment,
@@ -1431,7 +1444,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.6";
+    const SCRIPT_VERSION = "0.11.7";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2037,6 +2050,7 @@ function startGuildMonitor(Core) {
                 .mwigm-metric:nth-child(-n+2) { border-bottom: 1px solid #31415c; }
                 .mwigm-toolbar { flex-wrap: wrap; }
                 .mwigm-input { flex-basis: 100%; }
+                .mwigm-result-summary-meta { display: block; margin-left: 16px; }
                 .mwigm-icon-target-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .mwigm-icon-target-field:nth-child(even) { border-right: 0; }
                 .mwigm-icon-target-field:nth-child(-n+4) { border-bottom: 1px solid #31415c; }
@@ -2475,6 +2489,7 @@ function startGuildMonitor(Core) {
         const sections = weeks
             .map((week) => {
                 const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeZone: "UTC" }).format(new Date(Number(week.weekStartAt)));
+                const totalPoints = Core.getWeeklyTrialPointsTotal(week.results);
                 const matchingResults = Object.entries(Core.asObject(week.results)).filter(([hrid]) => {
                     const name = Core.getTrialName(hrid, state.guildTrialDetails, state.skillDetails);
                     return name.toLocaleLowerCase().includes(query) || date.toLocaleLowerCase().includes(query);
@@ -2485,7 +2500,8 @@ function startGuildMonitor(Core) {
                     const tier = Number(result.highestTier);
                     const level = Number.isFinite(tier) && tier > 0 ? `Lv ${100 + 10 * (tier - 1)}` : "--";
                     const status = result.done ? "Completed" : result.status ? Core.prettifyHrid(result.status) : "Not observed";
-                    const points = result.status && result.status !== "scheduled" ? Number(result.points) || 0 : "--";
+                    const observedPoints = Core.getTrialResultPoints(result);
+                    const points = observedPoints === null ? "--" : formatExactNumber(observedPoints);
                     return `<tr>
                         <td><span class="mwigm-trial-name">${escapeHtml(name)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(result.kind || "")}</span></td>
                         <td>${escapeHtml(status)}</td>
@@ -2497,7 +2513,7 @@ function startGuildMonitor(Core) {
                 const weekKey = `${guildKey()}:${Number(week.weekStartAt)}`;
                 const open = query || state.expandedResultWeeks.has(weekKey) ? " open" : "";
                 return `<details class="mwigm-result-week"${open}>
-                    <summary data-action="toggle-result-week" data-week-key="${escapeHtml(weekKey)}">Week of ${escapeHtml(date)}<span class="mwigm-result-summary-meta">${matchingResults.length} trial${matchingResults.length === 1 ? "" : "s"} · UTC week start</span></summary>
+                    <summary data-action="toggle-result-week" data-week-key="${escapeHtml(weekKey)}">Week of ${escapeHtml(date)}<span class="mwigm-result-summary-meta">Total points: ${totalPoints === null ? "--" : formatExactNumber(totalPoints)} · ${matchingResults.length} trial${matchingResults.length === 1 ? "" : "s"} · UTC week start</span></summary>
                     <table class="mwigm-table"><thead><tr><th>Trial</th><th>Status</th><th>Highest cleared</th><th>Points</th><th>Last seen</th></tr></thead><tbody>${rows}</tbody></table>
                 </details>`;
             }).filter(Boolean);

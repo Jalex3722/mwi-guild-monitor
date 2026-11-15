@@ -367,10 +367,24 @@ test("records observed trial results without losing signup history", () => {
     assert.equal(second[week].results.cook.points, 180);
     assert.equal(second[week].results.cook.done, true);
     assert.equal(second[week].results.badger.status, "scheduled");
+    assert.equal(Core.getWeeklyTrialPointsTotal(second[week].results), 180);
     const afterSignupObservation = Core.recordWeeklyTrialParticipation(second, Core.aggregateGuild([
         { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
     ], {}), week, week + 3000);
     assert.equal(afterSignupObservation[week].results.cook.highestTier, 3);
+});
+
+test("totals only observed weekly trial points", () => {
+    const results = {
+        cook: { status: "completed", points: 120 },
+        badger: { status: "in_progress", points: "80" },
+        mining: { status: "scheduled", points: 500 },
+        swarm: { status: "completed" },
+    };
+    assert.equal(Core.getWeeklyTrialPointsTotal(results), 200);
+    assert.equal(Core.getTrialResultPoints(results.mining), null);
+    assert.equal(Core.getWeeklyTrialPointsTotal({ mining: results.mining, swarm: results.swarm }), null);
+    assert.equal(Core.getWeeklyTrialPointsTotal({ cook: { status: "completed", points: 0 } }), 0);
 });
 
 test("tracks high-level thresholds alongside trial signup status", () => {
