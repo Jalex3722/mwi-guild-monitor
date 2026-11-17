@@ -19,7 +19,8 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 - Manual snapshots with average-level change comparison
 - Weekly skilling and combat trial signup counts
 - Previous-week signup tracking, with an unsigned status recorded only when neither trial category was joined
-- Per-trial signup levels, level ranges, minimum requirements, and member rosters
+- Per-trial signup levels, level ranges, the game-reported trial level, and member rosters
+- A **Recruit message** button that drafts a recruitment post linking your guild for the Recruit channel
 - Combat role distribution for each combat trial
 - Combat-level defaults and manual special-ability assignments, including Insanity and Revive
 - Per-combat-trial aura coverage, missing-aura, and duplicate-aura warnings
@@ -44,7 +45,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.12.1`.
+The monitor header displays its running version. The current release is `v0.13.0`.
 
 ## Collecting member skill data
 
@@ -56,6 +57,8 @@ The game sends the guild roster automatically, but it does not include every mem
 4. Check **GM > Missing profiles** until coverage reaches 100%.
 
 The **Get profile** button at the right side of each member in Missing profiles fills the game's *empty* chat draft with `/profile CharacterName` and focuses it while keeping the GM panel open and your place in the list. You must press Enter yourself to open the profile. It never submits the command or overwrites an existing draft, including whitespace. If the game chat box is closed or cannot be identified, it leaves the draft alone and shows a notice.
+
+The **Recruit message** button at the top of the monitor fills the game's *empty* chat draft with a short recruitment post that starts with `[g@]`, the game's chat link to your guild. When known, it includes about how many Guild Points the guild earned from trials last week (from weeks this browser observed in **Results**), the guild's rank on a Guild Points leaderboard viewed in the last 14 days (labeled weekly when the board is weekly), and the member count. It ends with the exact guild name to search under Guild > Join. Switch the chat to the Recruit channel, review or edit the draft, and press Enter yourself. It never sends the message or overwrites an existing draft.
 
 In **Trials**, each member in the **No skilling or combat signup** notice has a **Remind** button. It fills the same *empty* chat draft with a whisper (`/w CharacterName …`) politely reminding them to sign up for this week's trials. Review it and press Enter yourself to send; the script never sends the whisper or overwrites an existing draft.
 
@@ -87,7 +90,7 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - The guild's scheduled trial start, in your local time and UTC, with a countdown
 - Which members signed up for neither skilling nor combat, only during the final 24 hours before the start; category-specific absence is not treated as a general participation warning
 - Signup-time skill or combat levels
-- Guild-configured minimum level requirements
+- The level the game reports for each trial (`trialMinLevelsData`). This reflects the trial's own level, not a member requirement, so it never limits recommendations or the planner
 - Combat role counts for each combat trial
 - Actual skilling signup rosters
 - An even-strength skilling trial plan in the **Planner** tab
@@ -98,9 +101,9 @@ The Trials signup tables show current slots and remaining capacity. Each skillin
 
 ### Skilling trial planner
 
-The **Planner** tab suggests an even-strength layout for this week's skilling trials only; combat trials are not planned. A trial's **strength** is the sum of its planned members' captured levels in that trial's skill, because skilling trial progress is a shared pool that every participant adds to. The planner first seats every eligible member it can, then raises the weakest trial's strength as far as possible, then the next weakest, and so on. It respects guild minimum levels, signup slot caps, and the rule that members who joined after the guild week started cannot sign up. Small guilds are solved exactly; larger guilds use a deterministic local search that stays within a few levels of an even split.
+The **Planner** tab suggests an even-strength layout for this week's skilling trials only; combat trials are not planned. A trial's **strength** is the sum of its planned members' captured levels in that trial's skill, because skilling trial progress is a shared pool that every participant adds to. The planner first seats every eligible member it can, then raises the weakest trial's strength as far as possible, then the next weakest, and so on. It uses each member's cached profile levels, respects signup slot caps, and follows the rule that members who joined after the guild week started cannot sign up. Small guilds are solved exactly; larger guilds use a deterministic local search that stays within a few levels of an even split.
 
-Each trial lists its planned members (highest level first) with a colored dot: green when already signed for that trial, yellow when signed for a different skilling trial, red when not signed for any skilling trial. **Suggested changes** lists everyone whose current signup differs from the plan, and **Not in the plan** explains anyone left out (missing profile, below every minimum, joined this week, or no open slot). The plan is a suggestion only. It does not change signups, and it does not model gear, tools, buffs, or availability. To hide it, set `SKILLING_PLANNER_ENABLED` to `false` in the script.
+Each trial lists its planned members (highest level first) with a colored dot: green when already signed for that trial, yellow when signed for a different skilling trial, red when not signed for any skilling trial. **Suggested changes** lists everyone whose current signup differs from the plan, and **Not in the plan** explains anyone left out (missing profile, no captured level in any of this week's trial skills, joined this week, or no open slot). The plan is a suggestion only. It does not change signups, and it does not model gear, tools, buffs, or availability. To hide it, set `SKILLING_PLANNER_ENABLED` to `false` in the script.
 
 The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. Each week header shows the total observed points across that week's scored trials, even when collapsed; scheduled or unscored trials do not contribute. Each week can be expanded or collapsed independently; the newest observed week opens by default. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
 

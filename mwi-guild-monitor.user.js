@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.12.1
+// @version      0.13.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1031,7 +1031,9 @@
                 kind,
                 name: getTrialName(trialHrid, trialDetails, skillDetails),
                 skillHrid: detail.skillHrid || "",
-                minLevel: Number(minimums[trialHrid]) || 0,
+                // trialMinLevelsData is the level the game reports for each trial (its start/progress level),
+                // not a member signup requirement, so it never restricts who can join.
+                reportedLevel: Number(minimums[trialHrid]) || null,
                 capacity: getTrialCapacity(kind, buildingLevels),
                 signups,
                 signupCount: signups.length,
@@ -1050,7 +1052,7 @@
         const combat = combatHrids.map((hrid) => makeTrial(hrid, "combat"));
         const eligibleMembers = currentMembers.filter((member) => skilling.some((trial) => {
             const level = getProfileSkillLevel(member, trial.skillHrid);
-            return Number.isFinite(level) && trialAllowsLevel(trial, level);
+            return Number.isFinite(level);
         }));
         const recommendations = buildSkillingRecommendations(eligibleMembers, skilling, aggregate.skills, trialDetails, skillDetails);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
@@ -1069,7 +1071,7 @@
                 recommendedTrialName: "Unknown",
                 recommendedLevel: null,
                 signupStatus: member.profile && member.profile.skills.length ? "ineligible" : "missingProfile",
-                reason: member.profile && member.profile.skills.length ? "No captured level meets a current trial minimum" : "Profile skill levels not captured",
+                reason: member.profile && member.profile.skills.length ? "No captured level for a current trial skill" : "Profile skill levels not captured",
             };
         }).sort((left, right) => left.memberName.localeCompare(right.memberName));
         const optimalDistribution = skilling.map((trial) => {
@@ -1147,7 +1149,7 @@
                         level: getProfileSkillLevel(member, trial.skillHrid),
                         guildMedian: medianBySkill.get(trial.skillHrid),
                     }))
-                    .filter((option) => Number.isFinite(option.level) && (trialAllowsLevel(option.trial, option.level)));
+                    .filter((option) => Number.isFinite(option.level));
                 options.forEach((option) => {
                     option.medianDifference = Number.isFinite(option.guildMedian) ? option.level - option.guildMedian : option.level;
                 });
@@ -1312,7 +1314,7 @@
                     guildMedian,
                     medianDifference: Number.isFinite(level) && Number.isFinite(guildMedian) ? level - guildMedian : null,
                 };
-            }).filter((option) => Number.isFinite(option.level) && Number.isFinite(option.guildMedian) && trialAllowsLevel(trials.find((trial) => trial.trialHrid === option.trialHrid), option.level))
+            }).filter((option) => Number.isFinite(option.level) && Number.isFinite(option.guildMedian))
                 .sort((left, right) => right.medianDifference - left.medianDifference || right.level - left.level || left.trialName.localeCompare(right.trialName));
             if (!options.length) return null;
             return {
@@ -1323,10 +1325,6 @@
                 second: options[1] || null,
             };
         }).filter(Boolean).sort((left, right) => left.memberName.localeCompare(right.memberName));
-    }
-
-    function trialAllowsLevel(trial, level) {
-        return !trial.minLevel || level >= trial.minLevel;
     }
 
     function makeSnapshot(guild, aggregate, capturedAt = Date.now(), trialAnalysis = null) {
@@ -1424,7 +1422,8 @@
     // is the sum of its planned members' captured levels in that skill, because skilling
     // trial progress is a shared, additive pool. The plan raises the weakest trial as far
     // as possible, then the next weakest, and so on (leximin), while respecting guild
-    // minimum levels, signup slot caps, and week eligibility. It reads data only.
+    // signup slot caps and week eligibility. It reads data only. (The game's trialMinLevelsData
+    // is the trial's reported level, not a member requirement, so it is not applied.)
     // To revert: delete this block, its export, and the Planner tab (SKILLING_PLANNER_ENABLED).
     const PLANNER_EPSILON = 1e-9;
     const PLANNER_MAX_ITERATIONS = 2000;
@@ -1455,10 +1454,10 @@
             }
             const levels = trials.map((trial) => {
                 const level = getProfileSkillLevel(member, trial.skillHrid);
-                return Number.isFinite(level) && trialAllowsLevel(trial, level) ? level : null;
+                return Number.isFinite(level) ? level : null;
             });
             if (levels.every((level) => level === null)) {
-                unplanned.push({ ...base, reason: "belowMinimum" });
+                unplanned.push({ ...base, reason: "noTrialSkills" });
                 return;
             }
             const bestLevel = Math.max(...levels.filter((level) => level !== null));
@@ -1496,7 +1495,7 @@
                 trialHrid: trial.trialHrid,
                 name: trial.name,
                 skillHrid: trial.skillHrid,
-                minLevel: trial.minLevel || 0,
+                reportedLevel: trial.reportedLevel || null,
                 capacity: Number.isFinite(trial.capacity) ? trial.capacity : null,
                 members: plannedMembers,
                 plannedCount: plannedMembers.length,
@@ -1514,7 +1513,7 @@
             })))
             .sort((left, right) => (left.status === "unsigned") - (right.status === "unsigned") || left.memberName.localeCompare(right.memberName));
         const strengths = plannedTrials.map((trial) => trial.strength);
-        const reasonOrder = ["noOpenSlot", "belowMinimum", "joinedThisWeek", "missingProfile"];
+        const reasonOrder = ["noOpenSlot", "noTrialSkills", "joinedThisWeek", "missingProfile"];
 
         return {
             trials: plannedTrials,
@@ -1719,7 +1718,40 @@
     }
     // ---- End skilling trial planner ---------------------------------------------------
 
-    const TRIAL_REMINDER_MESSAGE ="Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
+    // ---- Recruitment chat message ----
+    // `[g@]` is the game's chat token that links your own guild.
+    const GUILD_CHAT_LINK = "[g@]";
+    const RECRUIT_RANK_MAX_AGE_MS = 14 * DAY_MS;
+
+    // Total observed trial Guild Points for the guild week before `currentWeekStartAt`, or null.
+    function getLastWeekTrialPoints(history, currentWeekStartAt) {
+        const currentWeekStart = toTimestamp(currentWeekStartAt);
+        if (currentWeekStart === null) return null;
+        const week = asObject(history)[String(currentWeekStart - WEEK_MS)];
+        const total = week ? getWeeklyTrialPointsTotal(week.results) : null;
+        return Number.isFinite(total) && total > 0 ? total : null;
+    }
+
+    // The guild's most recent observed rank on a Guild Points leaderboard, preferring a weekly board.
+    function getGuildPointsRank(observations, now = Date.now()) {
+        const boards = getGuildLeaderboardSpots(observations)
+            .filter((board) => /point/i.test(board.category) && now - Number(board.observedAt) <= RECRUIT_RANK_MAX_AGE_MS)
+            .map((board) => ({ ...board, weekly: /week/i.test(`${board.category} ${board.filter}`) }))
+            .sort((left, right) => Number(right.weekly) - Number(left.weekly) || Number(right.observedAt) - Number(left.observedAt));
+        return boards.length ? { rank: boards[0].guildRank, weekly: boards[0].weekly, observedAt: boards[0].observedAt } : null;
+    }
+
+    function buildRecruitMessage({ guildName = "", memberCount = null, lastWeekPoints = null, pointsRank = null } = {}) {
+        const name = String(guildName || "").replace(/[\r\n]+/g, " ").trim();
+        const facts = [];
+        if (Number.isFinite(lastWeekPoints) && lastWeekPoints > 0) facts.push(`~${Math.round(lastWeekPoints).toLocaleString("en-US")} Guild Points from trials last week`);
+        if (pointsRank && Number.isSafeInteger(pointsRank.rank)) facts.push(`#${pointsRank.rank} ${pointsRank.weekly ? "in weekly Guild Points" : "on the Guild Points leaderboard"}`);
+        if (Number.isFinite(memberCount) && memberCount > 0) facts.push(`${memberCount} members`);
+        const apply = name ? ` Apply via Guild > Join and search "${name}".` : " Apply via Guild > Join.";
+        return `${GUILD_CHAT_LINK} is recruiting!${facts.length ? ` ${facts.join(" · ")}.` : ""} Friendly, active guild running weekly trials together.${apply}`;
+    }
+
+    const TRIAL_REMINDER_MESSAGE = "Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
 
     function buildTrialReminderWhisper(name) {
         const trimmed = typeof name === "string" ? name.trim() : "";
@@ -1728,6 +1760,10 @@
     }
 
     return {
+        GUILD_CHAT_LINK,
+        getLastWeekTrialPoints,
+        getGuildPointsRank,
+        buildRecruitMessage,
         planSkillingTrials,
         TRIAL_REMINDER_MESSAGE,
         buildTrialReminderWhisper,
@@ -1790,7 +1826,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.12.1";
+    const SCRIPT_VERSION = "0.13.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1832,6 +1868,7 @@ function startGuildMonitor(Core) {
         trialRevision: 0,
         trialAnalysisCache: null,
         guildTrialScheduleHourOffset: null,
+        recruitNotice: null,
         expandedResultWeeks: new Set(),
         seenLatestResultWeeks: new Set(),
         expandedShrines: new Set(),
@@ -2308,6 +2345,9 @@ function startGuildMonitor(Core) {
             .mwigm-unsigned-member { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 8px; border: 1px solid rgba(226, 168, 75, 0.35); border-radius: 4px; }
             .mwigm-unsigned-member .mwigm-member-name { min-width: 0; overflow-wrap: anywhere; }
             .mwigm-chat-draft-notice { margin-top: 6px; font-weight: 600; }
+            .mwigm-recruit-button { flex: 0 0 auto; }
+            .mwigm-recruit-notice { display: flex; align-items: center; gap: 10px; }
+            .mwigm-recruit-notice > span { flex: 1; min-width: 0; }
             .mwigm-plan-table { min-width: 720px; }
             .mwigm-table td.mwigm-plan-members { text-align: left; }
             .mwigm-plan-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; font-size: 11px; }
@@ -2490,6 +2530,7 @@ function startGuildMonitor(Core) {
         panel.innerHTML = `
             <header class="mwigm-header">
                 <div class="mwigm-title"><strong>Guild Monitor <small>v${SCRIPT_VERSION}</small></strong><span>Waiting for game data</span></div>
+                <button class="mwigm-command mwigm-recruit-button" type="button" data-action="recruit-message" title="Fill an empty game chat draft with a recruitment message for the Recruit channel; you review it and press Enter">Recruit message</button>
                 <button class="mwigm-icon-button" type="button" data-action="close" title="Close Guild Monitor" aria-label="Close Guild Monitor">&times;</button>
             </header>
             <div class="mwigm-status"></div>
@@ -2586,8 +2627,9 @@ function startGuildMonitor(Core) {
         const toolbar = panel.querySelector(".mwigm-toolbar");
         const content = panel.querySelector(".mwigm-content");
         toolbar.innerHTML = renderToolbar(aggregate);
-        content.innerHTML = renderContent(aggregate);
+        content.innerHTML = renderRecruitNotice() + renderContent(aggregate);
         wrapWideTables(content);
+        panel.querySelector(".mwigm-recruit-button").disabled = !state.guild;
         if (focusedQuery) {
             const query = toolbar.querySelector('[data-control="query"]');
             query.focus({ preventScroll: true });
@@ -2897,7 +2939,7 @@ function startGuildMonitor(Core) {
             ${renderTrialScheduleNotice(schedule)}
             ${unsignedNotice}
             <div class="mwigm-section-title">Actual skilling signups <span>Signup-time levels when available</span></div>
-            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows || emptyTableRow(5)}</tbody></table>
+            <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th>Range</th><th title="Level the game reports for this trial; not a signup requirement">Trial level</th></tr></thead><tbody>${skillingRows || emptyTableRow(5)}</tbody></table>
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
@@ -2911,7 +2953,7 @@ function startGuildMonitor(Core) {
         const weekStart = Core.resolveGuildWeekStart(state.guild);
         const key = [
             weekStart,
-            ...analysis.skilling.map((trial) => `${trial.trialHrid}:${trial.minLevel}:${trial.capacity}:${trial.signups.map((entry) => entry.memberId).join(".")}`),
+            ...analysis.skilling.map((trial) => `${trial.trialHrid}:${trial.capacity}:${trial.signups.map((entry) => entry.memberId).join(".")}`),
             ...aggregate.members.map((member) => `${member.id}:${member.profile?.capturedAt || 0}:${member.joinedAt || ""}`),
         ].join("|");
         if (plannerCache && plannerCache.key === key) return plannerCache.plan;
@@ -2934,7 +2976,7 @@ function startGuildMonitor(Core) {
         const statusLabel = { here: "Already signed here", elsewhere: "Signed for another skilling trial", unsigned: "No skilling signup" };
         const reasonLabel = {
             noOpenSlot: "No open slot left in an eligible trial",
-            belowMinimum: "Below every trial's guild minimum level",
+            noTrialSkills: "No captured level in any of this week's trial skills",
             joinedThisWeek: "Joined after this guild week started",
             missingProfile: "Profile not captured",
         };
@@ -2948,7 +2990,7 @@ function startGuildMonitor(Core) {
                 ${metric("Strength spread", spread === null ? "--" : formatExactNumber(spread))}
                 ${metric("Suggested changes", plan.changes.length)}
             </div>`;
-        const explainer = `<div class="mwigm-notice mwigm-notice-info"><strong>Even-strength skilling plan.</strong> A trial's strength is the sum of its planned members' captured levels in that skill, since trial progress is shared. The plan raises the weakest trial as far as possible, then the next weakest, and respects guild minimum levels and signup slots. It is a suggestion only: no signups are changed, and gear, buffs, and availability are not modeled.</div>`;
+        const explainer = `<div class="mwigm-notice mwigm-notice-info"><strong>Even-strength skilling plan.</strong> A trial's strength is the sum of its planned members' captured levels in that skill, since trial progress is shared. The plan raises the weakest trial as far as possible, then the next weakest, and respects signup slots. It is a suggestion only: no signups are changed, and gear, buffs, and availability are not modeled.</div>`;
         const missingNotice = missingCount
             ? `<div class="mwigm-notice"><strong>${missingCount} member${missingCount === 1 ? "" : "s"} without a captured profile ${missingCount === 1 ? "is" : "are"} left out of the plan.</strong> Capture their profiles for a complete layout.<br><button class="mwigm-command" type="button" data-tab="missing">View missing profiles</button></div>`
             : "";
@@ -2957,10 +2999,9 @@ function startGuildMonitor(Core) {
             .filter((trial) => matches(trial.name, ...trial.members.map((entry) => entry.memberName)))
             .map((trial) => {
                 const slots = trial.capacity === null ? `${trial.plannedCount}` : `${trial.plannedCount}/${trial.capacity}`;
-                const minimum = trial.minLevel ? `<span class="mwigm-subtext mwigm-roster-names">Guild minimum ${trial.minLevel}</span>` : "";
                 const isWeakest = plan.trials.length > 1 && trial.strength === plan.weakestStrength;
                 return `<tr>
-                    <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span>${isWeakest ? ` <span class="mwigm-chip mwigm-chip-warn">Weakest</span>` : ""}${minimum}</td>
+                    <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span>${isWeakest ? ` <span class="mwigm-chip mwigm-chip-warn">Weakest</span>` : ""}</td>
                     <td><strong>${slots}</strong></td>
                     <td><strong>${formatExactNumber(trial.strength)}</strong></td>
                     <td>${trial.averageLevel === null ? "--" : trial.averageLevel.toFixed(1)}</td>
@@ -3011,7 +3052,7 @@ function startGuildMonitor(Core) {
                 <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(memberNames)}</span></td>
                 <td><strong>${trial.signupCount}/${Number.isFinite(trial.capacity) ? trial.capacity : "--"}</strong><span class="mwigm-subtext mwigm-roster-names">${slotText}</span>${slotFill}</td>
                 <td>${Number.isFinite(trial.averageLevel) ? trial.averageLevel.toFixed(1) : "--"}</td>
-                ${isCombat ? `<td colspan="2">${escapeHtml(roles)}</td>` : `<td>${range}</td><td>${trial.minLevel || "--"}</td>`}
+                ${isCombat ? `<td colspan="2">${escapeHtml(roles)}</td>` : `<td>${range}</td><td>${trial.reportedLevel || "--"}</td>`}
             </tr>
         `;
     }
@@ -3350,40 +3391,58 @@ function startGuildMonitor(Core) {
     function prepareChatDraft(memberId, buttonLabel, commandLabel, buildCommand) {
         const member = currentAggregate().members.find((entry) => String(entry.id) === String(memberId));
         if (!member) return;
-        const input = findGameChatInput();
-        if (!input) {
-            state.profileDraftNotice = `Could not find one visible game chat box. Open chat, then try ${buttonLabel} again.`;
-            render();
-            return;
-        }
-        const draft = input.isContentEditable ? input.textContent : input.value;
-        if (draft) {
-            state.profileDraftNotice = `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
-            render();
-            return;
-        }
         const command = buildCommand(member.name);
-        if (!command) {
-            state.profileDraftNotice = `This member's name cannot be used in a ${commandLabel}.`;
-            render();
-            return;
-        }
-        if (input.isContentEditable) {
-            input.textContent = command;
-        } else {
-            const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value");
-            if (descriptor?.set) descriptor.set.call(input, command);
-            else input.value = command;
-        }
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        if ((input.isContentEditable ? input.textContent : input.value) !== command) {
-            state.profileDraftNotice = "The game chat did not accept the draft. Please enter the command manually.";
+        const error = command ? fillGameChatDraft(command, buttonLabel) : `This member's name cannot be used in a ${commandLabel}.`;
+        if (error) {
+            state.profileDraftNotice = error;
             render();
             return;
         }
         state.profileDraftNotice = "";
         document.querySelector(`#${SCRIPT_ID}-panel .mwigm-profile-draft-notice`)?.remove();
-        input.focus();
+        findGameChatInput()?.focus();
+    }
+
+    // Puts `text` into the visible, empty game chat box without sending it. Returns an error message or "".
+    function fillGameChatDraft(text, buttonLabel) {
+        const input = findGameChatInput();
+        if (!input) return `Could not find one visible game chat box. Open chat, then try ${buttonLabel} again.`;
+        const draft = input.isContentEditable ? input.textContent : input.value;
+        if (draft) return `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
+        if (input.isContentEditable) {
+            input.textContent = text;
+        } else {
+            const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value");
+            if (descriptor?.set) descriptor.set.call(input, text);
+            else input.value = text;
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        if ((input.isContentEditable ? input.textContent : input.value) !== text) {
+            return "The game chat did not accept the draft. Please enter the message manually.";
+        }
+        return "";
+    }
+
+    function prepareRecruitDraft() {
+        const aggregate = currentAggregate();
+        const message = Core.buildRecruitMessage({
+            guildName: state.guild ? state.guild.name : "",
+            memberCount: aggregate.memberCount,
+            lastWeekPoints: Core.getLastWeekTrialPoints(state.guildStore ? state.guildStore.trialHistory : {}, Core.resolveGuildWeekStart(state.guild)),
+            pointsRank: Core.getGuildPointsRank(state.guildStore ? state.guildStore.leaderboards : {}),
+        });
+        const error = fillGameChatDraft(message, "Recruit message");
+        state.recruitNotice = error
+            ? { kind: "warn", text: error }
+            : { kind: "info", text: "Recruit message is in the chat box. Switch chat to the Recruit channel, review or edit it, then press Enter yourself to send." };
+        render();
+        if (!error) findGameChatInput()?.focus();
+    }
+
+    function renderRecruitNotice() {
+        if (!state.recruitNotice) return "";
+        const kindClass = state.recruitNotice.kind === "info" ? " mwigm-notice-info" : "";
+        return `<div class="mwigm-notice${kindClass} mwigm-recruit-notice"><span>${escapeHtml(state.recruitNotice.text)}</span><button class="mwigm-command mwigm-profile-button" type="button" data-action="dismiss-recruit-notice">Dismiss</button></div>`;
     }
 
     function coverageNotice(aggregate) {
@@ -3455,6 +3514,7 @@ function startGuildMonitor(Core) {
             state.activeTab = control.dataset.tab;
             state.query = "";
             state.profileDraftNotice = "";
+            state.recruitNotice = null;
             state.sort = state.activeTab === "missing" ? "freshness" : state.activeTab === "skills" ? "game" : "name";
             if (state.activeTab === "shrines") {
                 hydrateEconomyDefinitions();
@@ -3468,6 +3528,13 @@ function startGuildMonitor(Core) {
         }
 
         switch (control.dataset.action) {
+            case "recruit-message":
+                prepareRecruitDraft();
+                break;
+            case "dismiss-recruit-notice":
+                state.recruitNotice = null;
+                render();
+                break;
             case "get-profile":
                 prepareProfileDraft(control.dataset.memberId);
                 break;

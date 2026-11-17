@@ -425,7 +425,7 @@ test("tracks high-level thresholds alongside trial signup status", () => {
     assert.equal(analysis.optimalDistribution[0].assignments.length, 4);
 });
 
-test("balances skilling recommendations while respecting minimum levels", () => {
+test("balances skilling recommendations across trials", () => {
     const recommendationRoster = [
         { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook" },
         { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "cook" },
@@ -490,57 +490,26 @@ test("recommends all eligible members and leaves missing profiles unknown", () =
     assert.equal(analysis.allocationBalanced, true);
 });
 
-test("assigns single-trial members before flexible members", () => {
+test("treats the game trial level as information, not a signup requirement", () => {
     const aggregate = Core.aggregateGuild([
-        { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "cook" },
-        { id: "2", name: "Cooking only", signedUpSkillingTrialHrid: "cook" },
+        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
+        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "cook" },
     ], {
-        1: { id: "1", name: "Flexible", capturedAt: 1, skills: [
-            { skillHrid: "/skills/cooking", level: 150 },
-            { skillHrid: "/skills/mining", level: 110 },
-        ] },
-        2: { id: "2", name: "Cooking only", capturedAt: 1, skills: [
-            { skillHrid: "/skills/cooking", level: 100 },
-            { skillHrid: "/skills/mining", level: 80 },
-        ] },
+        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 120 }, { skillHrid: "/skills/mining", level: 50 }] },
+        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 110 }, { skillHrid: "/skills/mining", level: 60 }] },
     });
     const analysis = Core.analyzeTrials({
         aggregate,
         weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
-        trialDetails: {
-            cook: { skillHrid: "/skills/cooking" },
-            mine: { skillHrid: "/skills/mining" },
-        },
-        trialMinLevels: { cook: 90, mine: 100 },
-    });
-
-    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
-        ["Cooking only"],
-        ["Flexible"],
-    ]);
-    const flexible = analysis.memberComparisons.find((entry) => entry.memberName === "Flexible");
-    assert.equal(flexible.currentTrialHrid, "cook");
-    assert.equal(flexible.recommendedTrialHrid, "mine");
-    assert.equal(flexible.signupStatus, "different");
-    assert.deepEqual(analysis.wrongRecommendedSignup.map((entry) => entry.memberName), ["Flexible"]);
-    assert.deepEqual(analysis.missingRecommendedSignup, []);
-
-    const changedSignups = Core.aggregateGuild([
-        { id: "1", name: "Flexible", signedUpSkillingTrialHrid: "mine" },
-        { id: "2", name: "Cooking only", signedUpSkillingTrialHrid: "mine" },
-    ], Object.fromEntries(aggregate.members.map((member) => [member.id, member.profile])));
-    const changedAnalysis = Core.analyzeTrials({
-        aggregate: changedSignups,
-        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
         trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
-        trialMinLevels: { cook: 90, mine: 100 },
+        trialMinLevels: JSON.stringify({ cook: 180, mine: 250 }),
     });
-    assert.deepEqual(changedAnalysis.optimalDistribution.map((trial) => trial.assignments.map((entry) => entry.memberName)), [
-        ["Cooking only"],
-        ["Flexible"],
-    ]);
-    assert.equal(changedAnalysis.memberComparisons.find((entry) => entry.memberName === "Flexible").signupStatus, "aligned");
-    assert.equal(changedAnalysis.memberComparisons.find((entry) => entry.memberName === "Cooking only").signupStatus, "different");
+    assert.deepEqual(analysis.skilling.map((trial) => trial.reportedLevel), [180, 250]);
+    assert.equal(analysis.recommendations.length, 2, "nobody is excluded by the reported trial level");
+    assert.equal(analysis.allocationBalanced, true);
+    const plan = Core.planSkillingTrials({ trials: analysis.skilling, members: aggregate.members });
+    assert.equal(plan.plannedCount, 2);
+    assert.equal(plan.unplanned.length, 0);
 });
 
 test("globally maximizes the combined average of four balanced skilling trials", () => {
@@ -615,30 +584,7 @@ test("equal-level recommendations do not copy current signups", () => {
     assert.equal(signed.wrongRecommendedSignup.length, 4);
 });
 
-test("marks an infeasible even roster and retains every eligible member", () => {
-    const aggregate = Core.aggregateGuild([
-        { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
-        { id: "2", name: "Babbage", signedUpSkillingTrialHrid: "cook" },
-    ], {
-        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 120 }, { skillHrid: "/skills/mining", level: 50 }] },
-        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 110 }, { skillHrid: "/skills/mining", level: 60 }] },
-    });
-    const analysis = Core.analyzeTrials({
-        aggregate,
-        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
-        trialDetails: { cook: { skillHrid: "/skills/cooking" }, mine: { skillHrid: "/skills/mining" } },
-        trialMinLevels: { cook: 90, mine: 100 },
-    });
-
-    assert.equal(analysis.allocationBalanced, false);
-    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.length), [2, 0]);
-    assert.equal(analysis.recommendations.length, 2);
-    assert.equal(analysis.optimalDistribution[0].actualAverageLevel, 115);
-    assert.equal(analysis.optimalDistribution[0].targetAverageLevel, 115);
-    assert.equal(analysis.combinedTargetAverage, null);
-});
-
-test("global trial assignment respects level minimums", () => {
+test("global trial assignment keeps specialists in their best trial", () => {
     const trialHrids = ["cook", "mine", "brew"];
     const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing"];
     const levels = [
@@ -1136,7 +1082,7 @@ test("keeps the release version identical in every published location", () => {
 test("scrolls wide tables inside their own containers on narrow screens", () => {
     const fs = require("node:fs");
     const source = fs.readFileSync(require.resolve("../mwi-guild-monitor.user.js"), "utf8");
-    assert.match(source, /content\.innerHTML = renderContent\(aggregate\);\s*wrapWideTables\(content\);/);
+    assert.match(source, /content\.innerHTML = [^;]*renderContent\(aggregate\);\s*wrapWideTables\(content\);/);
     const narrowRules = source.match(/@media \(max-width: 900px\) \{([\s\S]*?)\n\s*\}\n/);
     assert.ok(narrowRules, "expected a narrow-screen table rule block");
     assert.match(narrowRules[1], /\.mwigm-table-scroll \{[^}]*overflow-x: auto/);
@@ -1181,4 +1127,45 @@ test("reads the trial start hour from the guild or update message and rejects ba
         assert.equal(schedule.known, false, String(bad));
         assert.equal(schedule.remindersOpen, true, "unknown start keeps the previous always-visible behavior");
     }
+});
+
+test("builds a single-line recruit message with the guild chat link and known stats", () => {
+    const message = Core.buildRecruitMessage({
+        guildName: "The Milky Scholars",
+        memberCount: 28,
+        lastWeekPoints: 12440,
+        pointsRank: { rank: 37, weekly: true },
+    });
+    assert.ok(message.startsWith(`${Core.GUILD_CHAT_LINK} is recruiting!`));
+    assert.equal(Core.GUILD_CHAT_LINK, "[g@]");
+    assert.match(message, /~12,440 Guild Points from trials last week/);
+    assert.match(message, /#37 in weekly Guild Points/);
+    assert.match(message, /28 members/);
+    assert.match(message, /search "The Milky Scholars"/);
+    assert.doesNotMatch(message, /[\r\n]/);
+    assert.ok(message.length <= 240, `length ${message.length}`);
+
+    const bare = Core.buildRecruitMessage({ guildName: "Line\nBreak" });
+    assert.doesNotMatch(bare, /Guild Points|members|#/);
+    assert.match(bare, /search "Line Break"/);
+});
+
+test("finds last week's trial points and a recent Guild Points rank", () => {
+    const weekStart = Date.UTC(2026, 10, 13);
+    const history = {
+        [weekStart - 7 * 86_400_000]: { weekStartAt: weekStart - 7 * 86_400_000, results: { a: { status: "completed", points: 700 }, b: { status: "completed", points: 540 } } },
+        [weekStart]: { weekStartAt: weekStart, results: { a: { status: "in_progress", points: 99 } } },
+    };
+    assert.equal(Core.getLastWeekTrialPoints(history, weekStart), 1240);
+    assert.equal(Core.getLastWeekTrialPoints({}, weekStart), null);
+
+    const now = weekStart + 86_400_000;
+    const boards = {
+        lifetime: { isGuild: true, category: "guild_points", filter: "all", guildRank: 80, observedAt: now - 1000 },
+        weekly: { isGuild: true, category: "guild_weekly_points", filter: "all", guildRank: 12, observedAt: now - 5000 },
+        stale: { isGuild: true, category: "guild_weekly_points", filter: "x", guildRank: 3, observedAt: now - 30 * 86_400_000 },
+        level: { isGuild: true, category: "guild", filter: "all", guildRank: 5, observedAt: now },
+    };
+    assert.deepEqual(Core.getGuildPointsRank(boards, now), { rank: 12, weekly: true, observedAt: now - 5000 });
+    assert.equal(Core.getGuildPointsRank({ level: boards.level }, now), null);
 });

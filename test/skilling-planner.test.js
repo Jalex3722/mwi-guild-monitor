@@ -15,7 +15,7 @@ function plannerMember(id, levels, extra = {}) {
 }
 
 function plannerTrial(skill, extra = {}) {
-    return { trialHrid: `/guild_skilling/${skill}`, name: skill, skillHrid: `/skills/${skill}`, minLevel: 0, capacity: 20, signups: [], ...extra };
+    return { trialHrid: `/guild_skilling/${skill}`, name: skill, skillHrid: `/skills/${skill}`, capacity: 20, signups: [], ...extra };
 }
 
 function leximinBest(levelsByMember, trialCount, capacities) {
@@ -65,14 +65,15 @@ test("skilling planner matches an exhaustive leximin search on small guilds", ()
     const skills = ["cooking", "mining", "brewing"];
     for (let round = 0; round < 60; round += 1) {
         const memberCount = 3 + Math.floor(random() * 5);
-        const minLevels = skills.map(() => (random() < 0.3 ? 90 : 0));
+        // A reported trial level (formerly treated as a minimum) must not exclude anyone.
+        const reportedLevels = skills.map(() => (random() < 0.3 ? 250 : null));
         const capacities = skills.map(() => (random() < 0.3 ? 2 : 20));
-        const trials = skills.map((skill, index) => plannerTrial(skill, { minLevel: minLevels[index], capacity: capacities[index] }));
+        const trials = skills.map((skill, index) => plannerTrial(skill, { reportedLevel: reportedLevels[index], capacity: capacities[index] }));
         const members = Array.from({ length: memberCount }, (_, index) => plannerMember(index + 1,
             Object.fromEntries(skills.map((skill) => [skill, 60 + Math.floor(random() * 90)]))));
         const levelsByMember = members.map((member) => skills.map((skill, index) => {
             const level = member.profile.skills.find((entry) => entry.skillHrid === `/skills/${skill}`).level;
-            return level >= minLevels[index] ? level : null;
+            return level;
         })).filter((levels) => levels.some((level) => level !== null));
         const plan = Core.planSkillingTrials({ trials, members });
         const expected = leximinBest(levelsByMember, skills.length, capacities);
@@ -100,8 +101,8 @@ test("skilling planner balances a full-size guild quickly", () => {
     assert.ok(plan.strongestStrength - plan.weakestStrength <= 50, `spread ${plan.strongestStrength - plan.weakestStrength}`);
 });
 
-test("skilling planner respects minimum levels, slot caps, and week eligibility", () => {
-    const trials = [plannerTrial("cooking", { minLevel: 100, capacity: 1 }), plannerTrial("mining", { capacity: 1 })];
+test("skilling planner respects slot caps and week eligibility", () => {
+    const trials = [plannerTrial("cooking", { reportedLevel: 200, capacity: 1 }), plannerTrial("mining", { capacity: 1 })];
     const weekStart = Date.UTC(2026, 10, 13);
     const members = [
         plannerMember(1, { cooking: 150, mining: 90 }),
@@ -115,7 +116,6 @@ test("skilling planner respects minimum levels, slot caps, and week eligibility"
     assert.deepEqual(plan.trials[1].members.map((entry) => entry.memberName), ["M2"]);
     const reasons = Object.fromEntries(plan.unplanned.map((entry) => [entry.memberName, entry.reason]));
     assert.deepEqual(reasons, { M3: "noOpenSlot", M4: "joinedThisWeek", M5: "missingProfile" });
-    assert.ok(plan.trials[0].members.every((entry) => entry.level >= 100));
 });
 
 test("skilling planner reports signup status and suggested changes", () => {
