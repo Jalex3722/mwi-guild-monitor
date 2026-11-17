@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.8
+// @version      0.11.9
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1454,7 +1454,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.8";
+    const SCRIPT_VERSION = "0.11.9";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1912,6 +1912,7 @@ function startGuildMonitor(Core) {
                 box-shadow: 0 6px 18px rgba(0,0,0,.35); cursor: pointer;
             }
             #${SCRIPT_ID}-button:hover { background: #223453; }
+            #${SCRIPT_ID}-button:focus-visible { outline: 2px solid #77d2b2; outline-offset: 2px; }
             #${SCRIPT_ID}-button[data-alert="true"]::after {
                 content: ""; position: absolute; right: 5px; top: 5px; width: 7px; height: 7px;
                 border-radius: 50%; background: #f5b642;
@@ -1936,10 +1937,22 @@ function startGuildMonitor(Core) {
             .mwigm-metric { padding: 10px 12px; border-right: 1px solid #31415c; min-width: 0; }
             .mwigm-metric:last-child { border-right: 0; }
             .mwigm-metric-label { color: #9cabc0; font-size: 11px; text-transform: uppercase; }
-            .mwigm-metric-value { display: block; margin-top: 2px; color: #fff; font-size: 18px; font-weight: 650; }
+            .mwigm-metric-value { display: block; margin-top: 2px; color: #fff; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+            .mwigm-content > .mwigm-status { margin: 12px 12px 4px; border: 1px solid #2c3c56; border-radius: 6px; background: #121c2e; overflow: hidden; }
+            .mwigm-content > .mwigm-status .mwigm-metric { padding: 8px 12px; border-right-color: #2c3c56; }
+            .mwigm-content > .mwigm-status .mwigm-metric-label { font-size: 10px; letter-spacing: .02em; }
+            .mwigm-content > .mwigm-status .mwigm-metric-value { font-size: 16px; color: #e9f0f8; }
             .mwigm-tabs { display: flex; flex: 0 0 auto; gap: 2px; padding: 8px 10px 0; overflow-x: auto; scrollbar-width: thin; border-bottom: 1px solid #31415c; background: #101827; }
-            .mwigm-tab { flex: 0 0 auto; min-height: 34px; padding: 7px 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #aebbd0; cursor: pointer; }
-            .mwigm-tab[aria-selected="true"] { color: #fff; border-bottom-color: #66c7a5; }
+            .mwigm-tab { flex: 0 0 auto; min-height: 34px; padding: 7px 11px; border: 0; border-bottom: 2px solid transparent; border-radius: 5px 5px 0 0; background: transparent; color: #aebbd0; cursor: pointer; font: inherit; }
+            .mwigm-tab:hover { color: #e9eef7; background: #172238; }
+            .mwigm-tab[aria-selected="true"] { color: #fff; font-weight: 600; border-bottom-color: #66c7a5; background: #162336; }
+            #${SCRIPT_ID}-panel :is(button, input, select, summary):focus-visible { outline: 2px solid #77d2b2; outline-offset: 1px; }
+            #${SCRIPT_ID}-panel .mwigm-tab:focus-visible { outline-offset: -2px; }
+            .mwigm-command:disabled, .mwigm-command:disabled:hover { opacity: .45; cursor: not-allowed; background: #1a2942; }
+            .mwigm-command-primary:disabled, .mwigm-command-primary:disabled:hover { background: #17634f; }
+            .mwigm-input::placeholder { color: #7f8fa6; }
+            .mwigm-input:hover, .mwigm-select:hover { border-color: #6a7f9f; }
+            .mwigm-select { cursor: pointer; }
             .mwigm-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #263651; }
             .mwigm-input, .mwigm-select { min-width: 0; height: 32px; border: 1px solid #526580; border-radius: 5px; background: #0c1422; color: #f3f6fa; padding: 5px 8px; }
             .mwigm-input { flex: 1; }
@@ -1954,8 +1967,8 @@ function startGuildMonitor(Core) {
             .mwigm-chat-draft-notice { margin-top: 6px; font-weight: 600; }
             .mwigm-missing-member-heading { display: flex; align-items: center; gap: 6px; width: 100%; }
             .mwigm-missing-member-heading .mwigm-member-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-            .mwigm-content { min-height: 0; flex: 1; overflow: auto; }
-            .mwigm-table { width: 100%; min-width: 680px; border-collapse: collapse; table-layout: fixed; }
+            .mwigm-content { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
+            .mwigm-table { width: 100%; min-width: 680px; border-collapse: collapse; table-layout: fixed; font-variant-numeric: tabular-nums; }
             .mwigm-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; background: #1c293b; color: #c4d0df; font-weight: 600; text-align: right; border-bottom: 1px solid #52637c; white-space: normal; }
             .mwigm-table th:first-child { text-align: left; }
             .mwigm-table td { padding: 9px 10px; border-bottom: 1px solid #2b3a50; text-align: right; vertical-align: top; white-space: normal; overflow-wrap: anywhere; }
@@ -1976,7 +1989,7 @@ function startGuildMonitor(Core) {
             .mwigm-skill-primary span { color: #92a2b9; font-size: 11px; white-space: normal; }
             .mwigm-skill-stat { border-left: 1px solid #2b3a53; text-align: right; }
             .mwigm-skill-stat > span { display: block; color: #92a2b9; font-size: 10px; }
-            .mwigm-skill-stat > strong { display: block; margin-top: 2px; color: #f5f8fc; font-size: 14px; }
+            .mwigm-skill-stat > strong { display: block; margin-top: 2px; color: #f5f8fc; font-size: 14px; font-variant-numeric: tabular-nums; }
             .mwigm-skill-stat .mwigm-subtext { overflow-wrap: anywhere; }
             .mwigm-skill-row:hover { background: #17243a; }
             .mwigm-skill-name, .mwigm-member-name { color: #f6f8fc; font-weight: 600; }
@@ -1988,7 +2001,7 @@ function startGuildMonitor(Core) {
             .mwigm-up { color: #68d5a9; }
             .mwigm-muted { color: #93a2b7; }
             .mwigm-missing { color: #f1bd67; }
-            .mwigm-notice { margin: 12px; padding: 10px 12px; border-left: 3px solid #e2a84b; background: #292419; color: #f0e4cf; }
+            .mwigm-notice { margin: 12px; padding: 10px 12px; border-left: 3px solid #e2a84b; border-radius: 0 6px 6px 0; background: #292419; color: #f0e4cf; }
             .mwigm-notice-info { border-left-color: #61b99a; background: #172a29; color: #d5e9e1; }
             .mwigm-notice .mwigm-command { margin-top: 8px; }
             .mwigm-empty { padding: 44px 22px; text-align: center; color: #a8b5c8; }
@@ -1996,7 +2009,9 @@ function startGuildMonitor(Core) {
             .mwigm-list { margin: 0; padding: 0; list-style: none; }
             .mwigm-list li { display: flex; gap: 10px; align-items: center; padding: 9px 12px; border-bottom: 1px solid #24334b; }
             .mwigm-list li > span:first-child { flex: 1; min-width: 0; }
-            .mwigm-section-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; padding: 15px 12px 8px; border-bottom: 1px solid #40516a; color: #f3f6fb; font-size: 14px; font-weight: 650; }
+            .mwigm-section-title { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; padding: 18px 12px 8px; border-bottom: 1px solid #40516a; color: #f3f6fb; font-size: 14px; font-weight: 650; }
+            .mwigm-section-title::before { content: ""; align-self: center; flex: 0 0 3px; height: 14px; margin-right: -6px; border-radius: 2px; background: #66c7a5; }
+            .mwigm-section-title > span { margin-left: auto; }
             .mwigm-section-title span { color: #8fa0b7; font-size: 11px; font-weight: 400; }
             .mwigm-trial-name { font-weight: 650; color: #f4f7fb; }
             .mwigm-trial-type { color: #9aacc0; font-size: 10px; text-transform: uppercase; font-weight: 650; }
@@ -2057,13 +2072,28 @@ function startGuildMonitor(Core) {
             .mwigm-icon-target-empty { padding: 13px 12px; border-top: 1px solid #31415c; border-bottom: 1px solid #31415c; color: #9eafc2; }
             .mwigm-purchased { color: #77d2b2; }
             .mwigm-footer { padding: 8px 12px; color: #8190a6; font-size: 11px; border-top: 1px solid #31415c; }
+            @media (max-width: 900px) {
+                .mwigm-table-scroll { max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+                .mwigm-table-scroll .mwigm-table :is(th, td):first-child:not([colspan]) { position: sticky; left: 0; z-index: 1; background: #101827; box-shadow: 1px 0 0 #2b3a50; }
+                .mwigm-table-scroll .mwigm-table th:first-child:not([colspan]) { z-index: 2; background: #1c293b; }
+                .mwigm-table-scroll .mwigm-table tbody tr:nth-child(even) td:first-child { background: #141f2d; }
+                .mwigm-table-scroll .mwigm-table tbody tr:hover td:first-child { background: #213044; }
+                .mwigm-table-scroll .mwigm-table td.mwigm-no-results { text-align: left; }
+            }
             @media (max-width: 620px) {
                 #${SCRIPT_ID}-panel { top: 0; right: 0; bottom: 0; width: 100vw; border-radius: 0; }
-                .mwigm-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-                .mwigm-metric:nth-child(2) { border-right: 0; }
-                .mwigm-metric:nth-child(-n+2) { border-bottom: 1px solid #31415c; }
+                .mwigm-header { padding: 10px 12px; }
+                .mwigm-header + .mwigm-status .mwigm-metric { padding: 7px 8px; }
+                .mwigm-header + .mwigm-status .mwigm-metric-label { font-size: 9px; }
+                .mwigm-header + .mwigm-status .mwigm-metric-value { font-size: 15px; }
+                .mwigm-content > .mwigm-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                .mwigm-content > .mwigm-status .mwigm-metric:nth-child(2n) { border-right: 0; }
+                .mwigm-content > .mwigm-status .mwigm-metric:nth-child(-n+2) { border-bottom: 1px solid #2c3c56; }
+                .mwigm-tabs { flex-wrap: wrap; padding: 6px 8px 0; }
+                .mwigm-tab { min-height: 30px; padding: 5px 9px; }
                 .mwigm-toolbar { flex-wrap: wrap; }
                 .mwigm-input { flex-basis: 100%; }
+                .mwigm-select { flex: 1 1 auto; }
                 .mwigm-result-summary-meta { display: block; margin-left: 16px; }
                 .mwigm-icon-target-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .mwigm-icon-target-field:nth-child(even) { border-right: 0; }
@@ -2199,11 +2229,24 @@ function startGuildMonitor(Core) {
         const content = panel.querySelector(".mwigm-content");
         toolbar.innerHTML = renderToolbar(aggregate);
         content.innerHTML = renderContent(aggregate);
+        wrapWideTables(content);
         if (focusedQuery) {
             const query = toolbar.querySelector('[data-control="query"]');
             query.focus({ preventScroll: true });
             query.setSelectionRange(focusedQuery.start, focusedQuery.end);
         }
+    }
+
+    // Give each wide table its own horizontal scroller so notices, metrics, and headings stay in view on narrow screens.
+    function wrapWideTables(container) {
+        container.querySelectorAll("table.mwigm-table").forEach((table) => {
+            const parent = table.parentElement;
+            if (parent.classList.contains("mwigm-table-scroll") || parent.classList.contains("mwigm-shrine-table-scroll")) return;
+            const wrapper = document.createElement("div");
+            wrapper.className = "mwigm-table-scroll";
+            parent.insertBefore(wrapper, table);
+            wrapper.appendChild(table);
+        });
     }
 
     function renderMetrics(aggregate) {
@@ -2936,6 +2979,8 @@ function startGuildMonitor(Core) {
             }
             if (state.activeTab === "guild") hydrateEconomyDefinitions();
             render();
+            const content = document.querySelector(`#${SCRIPT_ID}-panel .mwigm-content`);
+            if (content) content.scrollTop = 0;
             return;
         }
 

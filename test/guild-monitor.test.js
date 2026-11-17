@@ -1117,3 +1117,28 @@ test("refuses trial reminder whispers for names that would break the command", (
     assert.equal(Core.buildTrialReminderWhisper("Two Words"), null);
     assert.equal(Core.buildTrialReminderWhisper("Line\nBreak"), null);
 });
+
+test("keeps the release version identical in every published location", () => {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const root = path.join(__dirname, "..");
+    const source = fs.readFileSync(path.join(root, "mwi-guild-monitor.user.js"), "utf8");
+    const version = require("../package.json").version;
+    assert.equal(source.match(/^\/\/ @version\s+(\S+)$/m)[1], version);
+    assert.equal(source.match(/const SCRIPT_VERSION = "([^"]+)"/)[1], version);
+    assert.ok(fs.readFileSync(path.join(root, "README.md"), "utf8").includes(`The current release is \`v${version}\`.`));
+    const raw = "https://raw.githubusercontent.com/Jalex3722/mwi-guild-monitor/main/mwi-guild-monitor.user.js";
+    const metadata = (key) => source.match(new RegExp(`^// @${key}[ \\t]+(\\S+)[ \\t]*\\r?$`, "m"))?.[1];
+    assert.equal(metadata("updateURL"), raw);
+    assert.equal(metadata("downloadURL"), raw);
+});
+
+test("scrolls wide tables inside their own containers on narrow screens", () => {
+    const fs = require("node:fs");
+    const source = fs.readFileSync(require.resolve("../mwi-guild-monitor.user.js"), "utf8");
+    assert.match(source, /content\.innerHTML = renderContent\(aggregate\);\s*wrapWideTables\(content\);/);
+    const narrowRules = source.match(/@media \(max-width: 900px\) \{([\s\S]*?)\n\s*\}\n/);
+    assert.ok(narrowRules, "expected a narrow-screen table rule block");
+    assert.match(narrowRules[1], /\.mwigm-table-scroll \{[^}]*overflow-x: auto/);
+    assert.match(narrowRules[1], /:first-child:not\(\[colspan\]\) \{[^}]*position: sticky; left: 0/);
+});
