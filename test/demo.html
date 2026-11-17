@@ -62,7 +62,12 @@
         const now = Date.now();
         const todayUtc = new Date(now);
         const midnightUtc = Date.UTC(todayUtc.getUTCFullYear(), todayUtc.getUTCMonth(), todayUtc.getUTCDate());
-        const currentWeekStartAt = midnightUtc - ((todayUtc.getUTCDay() - 5 + 7) % 7) * 86_400_000;
+        // ?trialsSoon starts the demo guild week 2 hours ago with trials 5 hours after it, inside the reminder window.
+        const trialsSoon = new URLSearchParams(location.search).has("trialsSoon");
+        const currentWeekStartAt = trialsSoon
+            ? Math.floor(now / 3_600_000) * 3_600_000 - 2 * 3_600_000
+            : midnightUtc - ((todayUtc.getUTCDay() - 5 + 7) % 7) * 86_400_000;
+        const trialScheduleHourOffset = trialsSoon ? 5 : 21;
         const previousWeekStartAt = currentWeekStartAt - 7 * 86_400_000;
         const guildCharacterMap = {
             1: { characterID: 1, guildRole: "leader", experience: 120000000, weeklyExperience: 1200000, status: "joined", signedUpSkillingTrialHrid: "/guild_skilling/cooking", signedUpCombatTrialHrid: "/guild_combat/badger", signedUpCombatRoleHrid: "/combat_roles/tank", signupWeekStartAt: currentWeekStartAt },
@@ -152,7 +157,7 @@
             });
             send({
                 type: "init_character_data",
-                guild: { id: 44, name: "The Milky Scholars", currentWeekStartAt, trialMinLevelsData: "{\"/guild_skilling/cooking\":90,\"/guild_skilling/mining\":90}" },
+                guild: { id: 44, name: "The Milky Scholars", currentWeekStartAt, trialScheduleHourOffset, trialMinLevelsData: "{\"/guild_skilling/cooking\":90,\"/guild_skilling/mining\":90}" },
                 guildCharacterMap,
                 guildSharableCharacterMap,
                 guildWeeklyTrialSet: { skillHrids: ["/guild_skilling/cooking", "/guild_skilling/mining"], combatHrids: ["/guild_combat/badger", "/guild_combat/swarm"] },

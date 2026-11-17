@@ -1277,3 +1277,43 @@ test("skilling planner reports signup status and suggested changes", () => {
     assert.equal(plan.changes.find((entry) => entry.memberName === "M2").currentTrialName, "cooking");
     assert.equal(changes.indexOf("M2"), 0, "members signed elsewhere are listed before unsigned members");
 });
+
+test("resolves the guild trial start and opens reminders only in the final 24 hours", () => {
+    const weekStart = Date.UTC(2026, 10, 13); // Friday 00:00 UTC
+    const hour = 3_600_000;
+    const guild = { currentWeekStartAt: weekStart, trialScheduleHourOffset: 21 };
+
+    const early = Core.resolveTrialSchedule(guild, null, Date.UTC(2026, 10, 17, 12));
+    assert.equal(early.known, true);
+    assert.equal(early.startAt, Date.UTC(2026, 10, 20, 21), "a past start rolls to next week's");
+    assert.equal(early.remindersOpen, false);
+    assert.equal(early.reminderOpensAt, Date.UTC(2026, 10, 20), "never before that trial's week begins");
+
+    const sameDay = Core.resolveTrialSchedule(guild, null, weekStart + 10 * hour);
+    assert.equal(sameDay.startAt, weekStart + 21 * hour);
+    assert.equal(sameDay.remindersOpen, true);
+    assert.equal(sameDay.inProgress, false);
+
+    const running = Core.resolveTrialSchedule(guild, null, weekStart + 21.5 * hour);
+    assert.equal(running.inProgress, true);
+    assert.equal(running.remindersOpen, false);
+
+    const finished = Core.resolveTrialSchedule(guild, null, weekStart + 23.5 * hour);
+    assert.equal(finished.startAt, weekStart + 7 * 86_400_000 + 21 * hour);
+    assert.equal(finished.remindersOpen, false);
+});
+
+test("reads the trial start hour from the guild or update message and rejects bad values", () => {
+    const weekStart = Date.UTC(2026, 10, 13);
+    const now = weekStart + 3_600_000;
+    const midnight = Core.resolveTrialSchedule({ currentWeekStartAt: weekStart }, "0", now);
+    assert.equal(midnight.startAt, weekStart, "0 is a real offset: the week's own midnight");
+    assert.equal(midnight.inProgress, true);
+    assert.equal(Core.resolveTrialSchedule({ currentWeekStartAt: weekStart, trialScheduleHourOffset: 5 }, 9, now).hourOffset, 5);
+    assert.equal(Core.resolveTrialSchedule({ currentWeekStartAt: weekStart }, 9, now).hourOffset, 9);
+    for (const bad of [24, -1, 2.5, "", null, undefined, "noon"]) {
+        const schedule = Core.resolveTrialSchedule({ currentWeekStartAt: weekStart }, bad, now);
+        assert.equal(schedule.known, false, String(bad));
+        assert.equal(schedule.remindersOpen, true, "unknown start keeps the previous always-visible behavior");
+    }
+});

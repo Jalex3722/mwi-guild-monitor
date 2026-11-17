@@ -59,6 +59,8 @@ The **Get profile** button at the right side of each member in Missing profiles 
 
 In **Trials**, each member in the **No skilling or combat signup** notice has a **Remind** button. It fills the same *empty* chat draft with a whisper (`/w CharacterName …`) politely reminding them to sign up for this week's trials. Review it and press Enter yourself to send; the script never sends the whisper or overwrites an existing draft.
 
+The no-signup notice and its Remind buttons appear only in the 24 hours before the guild's scheduled trial start (or from the guild week reset, if that is later) and hide once trials begin. Until then, the Trials tab shows the start time and when reminders open. The start is read from the game's `trialScheduleHourOffset`: whole hours after the guild week begins (Friday 00:00 UTC). If the game has not sent it yet, the notice behaves as before and a note asks you to open Guild in the game.
+
 Combat level is captured from the profile's separate `combatLevel` field and included with the member's cached skill levels. Previously captured profiles need to be opened again to add their Combat level.
 
 This is intentionally manual. Automatically requesting every profile would send actions to the game server and would conflict with the game's extension rules.
@@ -82,7 +84,8 @@ The first and second choices use `member level - captured guild median`. They hi
 The **Trials** tab reads the current weekly trial set and the signup information already sent to the game. It shows:
 
 - How many members signed up for skilling and combat trials
-- Which members signed up for neither skilling nor combat; category-specific absence is not treated as a general participation warning
+- The guild's scheduled trial start, in your local time and UTC, with a countdown
+- Which members signed up for neither skilling nor combat, only during the final 24 hours before the start; category-specific absence is not treated as a general participation warning
 - Signup-time skill or combat levels
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial

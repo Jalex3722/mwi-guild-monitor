@@ -368,6 +368,40 @@
         return toTimestamp(value) ?? currentGuildWeekStart(now);
     }
 
+    const HOUR_MS = 3_600_000;
+    const TRIAL_RUN_MS = 2 * HOUR_MS; // skilling trial hour, then the combat trial hour
+    const REMINDER_LEAD_MS = DAY_MS;
+
+    // The game sends the guild's trial start as whole hours (0-23) after the guild week starts
+    // (`guild.trialScheduleHourOffset`, or `guildTrialScheduleHourOffset` on guild updates).
+    function parseTrialScheduleHourOffset(value) {
+        if (typeof value !== "number" && typeof value !== "string") return null;
+        if (typeof value === "string" && !value.trim()) return null;
+        const hours = Number(value);
+        return Number.isInteger(hours) && hours >= 0 && hours < 24 ? hours : null;
+    }
+
+    function resolveTrialSchedule(guild, scheduleHourOffset = null, now = Date.now()) {
+        const hourOffset = parseTrialScheduleHourOffset(firstDefined(guild, ["trialScheduleHourOffset", "guildTrialScheduleHourOffset"], null))
+            ?? parseTrialScheduleHourOffset(scheduleHourOffset);
+        if (hourOffset === null) {
+            return { known: false, hourOffset: null, startAt: null, reminderOpensAt: null, inProgress: false, remindersOpen: true };
+        }
+        let startAt = resolveGuildWeekStart(guild, now) + hourOffset * HOUR_MS;
+        while (startAt + TRIAL_RUN_MS <= now) startAt += WEEK_MS;
+        while (startAt - WEEK_MS + TRIAL_RUN_MS > now) startAt -= WEEK_MS;
+        // Reminders open 24 hours before the start, but never before that trial's guild week begins.
+        const reminderOpensAt = Math.max(startAt - REMINDER_LEAD_MS, startAt - hourOffset * HOUR_MS);
+        return {
+            known: true,
+            hourOffset,
+            startAt,
+            reminderOpensAt,
+            inProgress: now >= startAt,
+            remindersOpen: now >= reminderOpensAt && now < startAt,
+        };
+    }
+
     function isCurrentSignup(member, guildWeekStartAt, now = Date.now()) {
         if (!member || !member.signupWeekStartAt) return true;
         const signupStart = toTimestamp(member.signupWeekStartAt);
@@ -1694,6 +1728,7 @@
     }
 
     return {
+        resolveTrialSchedule,
         planSkillingTrials,
         TRIAL_REMINDER_MESSAGE,
         buildTrialReminderWhisper,
@@ -1794,6 +1829,7 @@ function startGuildMonitor(Core) {
         renderQueued: false,
         trialRevision: 0,
         trialAnalysisCache: null,
+        guildTrialScheduleHourOffset: null,
         expandedResultWeeks: new Set(),
         seenLatestResultWeeks: new Set(),
         expandedShrines: new Set(),
@@ -2086,6 +2122,7 @@ function startGuildMonitor(Core) {
             case "init_character_data":
                 applyEconomyDefinitions(message);
                 state.guild = message.guild || null;
+                state.guildTrialScheduleHourOffset = message.guildTrialScheduleHourOffset ?? null;
                 state.guildCharacterMap = message.guildCharacterMap || {};
                 state.guildSharableCharacterMap = message.guildSharableCharacterMap || {};
                 state.guildTrialSignupLevelMap = message.guildTrialSignupLevelMap || {};
@@ -2105,6 +2142,7 @@ function startGuildMonitor(Core) {
                 break;
             case "guild_updated":
                 state.guild = message.guild || null;
+                state.guildTrialScheduleHourOffset = message.guildTrialScheduleHourOffset ?? state.guildTrialScheduleHourOffset;
                 state.guildWeeklyTrialSet = message.guildWeeklyTrialSet || state.guildWeeklyTrialSet;
                 state.guildBuildingLevels = message.guildBuildingLevelMap || state.guildBuildingLevels;
                 state.guildBuffLevels = Core.extractGuildBuffLevels(message, state.guildBuffLevels);
@@ -2473,6 +2511,10 @@ function startGuildMonitor(Core) {
         panel.addEventListener("input", handlePanelInput);
         panel.addEventListener("change", handlePanelInput);
         document.body.append(button, panel);
+        // Keep the trial countdown and 24-hour reminder window current while the Trials tab is open.
+        setInterval(() => {
+            if (state.isOpen && state.activeTab === "trials" && !panel.contains(document.activeElement)) render();
+        }, 60_000);
         render();
     }
 
@@ -2789,6 +2831,35 @@ function startGuildMonitor(Core) {
         `;
     }
 
+    function formatTrialTime(timestamp) {
+        const date = new Date(timestamp);
+        const local = date.toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        const utc = `${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")} UTC`;
+        return `${local} your time (${utc})`;
+    }
+
+    function formatUntil(timestamp) {
+        const remaining = Math.max(0, timestamp - Date.now());
+        const hours = Math.floor(remaining / 3_600_000);
+        const minutes = Math.floor((remaining % 3_600_000) / 60_000);
+        if (hours >= 24) return `in ${Math.floor(hours / 24)}d ${hours % 24}h`;
+        return hours ? `in ${hours}h ${minutes}m` : `in ${minutes}m`;
+    }
+
+    function renderTrialScheduleNotice(schedule) {
+        if (!schedule.known) {
+            return `<div class="mwigm-notice mwigm-notice-info"><strong>Trial start time not received yet.</strong> Open Guild in the game so the monitor can read the guild's scheduled start. Until then, unsigned members are listed at any time.</div>`;
+        }
+        const when = `<strong>${escapeHtml(formatTrialTime(schedule.startAt))}</strong>`;
+        if (schedule.inProgress) {
+            return `<div class="mwigm-notice mwigm-notice-info mwigm-trial-schedule">Trials began ${when}. Signup reminders reopen 24 hours before next week's start.</div>`;
+        }
+        const reminderLine = schedule.remindersOpen
+            ? "Signup reminders are open until the start."
+            : `Unsigned members and Remind buttons appear ${escapeHtml(formatUntil(schedule.reminderOpensAt))}, at ${escapeHtml(formatTrialTime(schedule.reminderOpensAt))}: 24 hours before the start, or at the guild week reset if that is later.`;
+        return `<div class="mwigm-notice mwigm-notice-info mwigm-trial-schedule">Trials start ${when} · ${escapeHtml(formatUntil(schedule.startAt))}.<br><span class="mwigm-subtext">${reminderLine}</span></div>`;
+    }
+
     function renderTrials(aggregate) {
         const analysis = currentTrialAnalysis(aggregate);
         if (!analysis.hasTrialData) {
@@ -2796,15 +2867,16 @@ function startGuildMonitor(Core) {
         }
 
         const query = state.query.toLocaleLowerCase();
+        const schedule = Core.resolveTrialSchedule(state.guild, state.guildTrialScheduleHourOffset);
         const overview = `
             <div class="mwigm-status">
                 ${metric("Skilling signed", `${analysis.skillingSignedCount}/${aggregate.memberCount}`)}
                 ${metric("Combat signed", `${analysis.combatSignedCount}/${aggregate.memberCount}`)}
                 ${metric("Any trial", `${analysis.anyTrialSignedCount}/${aggregate.memberCount}`)}
-                ${metric("No trial signup", analysis.unsignedTrials.length)}
+                ${schedule.remindersOpen ? metric("No trial signup", analysis.unsignedTrials.length) : metric(schedule.inProgress ? "Trials running" : "Trials start", schedule.inProgress ? "Now" : formatUntil(schedule.startAt))}
             </div>
         `;
-        const unsignedNotice = analysis.unsignedTrials.length
+        const unsignedNotice = schedule.remindersOpen && analysis.unsignedTrials.length
             ? `<div class="mwigm-notice"><strong>No skilling or combat signup:</strong>
                 <div class="mwigm-unsigned-list">${analysis.unsignedTrials.map((member) => `<span class="mwigm-unsigned-member"><span class="mwigm-member-name">${escapeHtml(member.name)}</span><button class="mwigm-command mwigm-profile-button" type="button" data-action="remind-trial" data-member-id="${escapeHtml(member.id)}" title="Fill an empty game chat draft with a polite whisper reminder; you press Enter">Remind</button></span>`).join("")}</div>
                 <span class="mwigm-subtext">Remind fills an empty game chat draft with a whisper. Review it and press Enter yourself to send.</span>
@@ -2820,6 +2892,7 @@ function startGuildMonitor(Core) {
             .join("");
         return `
             ${overview}
+            ${renderTrialScheduleNotice(schedule)}
             ${unsignedNotice}
             <div class="mwigm-section-title">Actual skilling signups <span>Signup-time levels when available</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th>Range</th><th>Minimum</th></tr></thead><tbody>${skillingRows || emptyTableRow(5)}</tbody></table>
