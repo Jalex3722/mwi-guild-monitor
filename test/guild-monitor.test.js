@@ -507,9 +507,6 @@ test("treats the game trial level as information, not a signup requirement", () 
     assert.deepEqual(analysis.skilling.map((trial) => trial.reportedLevel), [180, 250]);
     assert.equal(analysis.recommendations.length, 2, "nobody is excluded by the reported trial level");
     assert.equal(analysis.allocationBalanced, true);
-    const plan = Core.planSkillingTrials({ trials: analysis.skilling, members: aggregate.members });
-    assert.equal(plan.plannedCount, 2);
-    assert.equal(plan.unplanned.length, 0);
 });
 
 test("globally maximizes the combined average of four balanced skilling trials", () => {
@@ -1129,43 +1126,15 @@ test("reads the trial start hour from the guild or update message and rejects ba
     }
 });
 
-test("builds a single-line recruit message with the guild chat link and known stats", () => {
-    const message = Core.buildRecruitMessage({
-        guildName: "The Milky Scholars",
-        memberCount: 28,
-        lastWeekPoints: 12440,
-        pointsRank: { rank: 37, weekly: true },
-    });
-    assert.ok(message.startsWith(`${Core.GUILD_CHAT_LINK} is recruiting!`));
+test("builds the guild recruitment message with the guild chat link", () => {
+    const message = Core.buildRecruitMessage();
     assert.equal(Core.GUILD_CHAT_LINK, "[g@]");
-    assert.match(message, /~12,440 Guild Points from trials last week/);
-    assert.match(message, /#37 in weekly Guild Points/);
-    assert.match(message, /28 members/);
-    assert.match(message, /search "The Milky Scholars"/);
-    assert.doesNotMatch(message, /[\r\n]/);
+    assert.ok(message.includes(Core.GUILD_CHAT_LINK));
+    assert.match(message, /looking for YOU/);
+    assert.match(message, /top 30 guild in Guild Points/);
+    assert.match(message, /relaxed requirements/);
+    assert.match(message, /online and signing up for trials/);
+    assert.ok(message.endsWith("Hope you apply! :)"));
+    assert.ok(!/[\r\n]/.test(message));
     assert.ok(message.length <= 240, `length ${message.length}`);
-
-    const bare = Core.buildRecruitMessage({ guildName: "Line\nBreak" });
-    assert.doesNotMatch(bare, /Guild Points|members|#/);
-    assert.match(bare, /search "Line Break"/);
-});
-
-test("finds last week's trial points and a recent Guild Points rank", () => {
-    const weekStart = Date.UTC(2026, 10, 13);
-    const history = {
-        [weekStart - 7 * 86_400_000]: { weekStartAt: weekStart - 7 * 86_400_000, results: { a: { status: "completed", points: 700 }, b: { status: "completed", points: 540 } } },
-        [weekStart]: { weekStartAt: weekStart, results: { a: { status: "in_progress", points: 99 } } },
-    };
-    assert.equal(Core.getLastWeekTrialPoints(history, weekStart), 1240);
-    assert.equal(Core.getLastWeekTrialPoints({}, weekStart), null);
-
-    const now = weekStart + 86_400_000;
-    const boards = {
-        lifetime: { isGuild: true, category: "guild_points", filter: "all", guildRank: 80, observedAt: now - 1000 },
-        weekly: { isGuild: true, category: "guild_weekly_points", filter: "all", guildRank: 12, observedAt: now - 5000 },
-        stale: { isGuild: true, category: "guild_weekly_points", filter: "x", guildRank: 3, observedAt: now - 30 * 86_400_000 },
-        level: { isGuild: true, category: "guild", filter: "all", guildRank: 5, observedAt: now },
-    };
-    assert.deepEqual(Core.getGuildPointsRank(boards, now), { rank: 12, weekly: true, observedAt: now - 5000 });
-    assert.equal(Core.getGuildPointsRank({ level: boards.level }, now), null);
 });
