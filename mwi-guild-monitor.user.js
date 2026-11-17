@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.9
+// @version      0.12.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1790,7 +1790,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.9";
+    const SCRIPT_VERSION = "0.12.0";
     // Set to false to hide the skilling trial Planner tab without touching anything else.
     const SKILLING_PLANNER_ENABLED = true;
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
