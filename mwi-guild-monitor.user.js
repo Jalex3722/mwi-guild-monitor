@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.11.7
+// @version      0.11.8
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1385,7 +1385,17 @@
         return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }
 
+    const TRIAL_REMINDER_MESSAGE = "Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
+
+    function buildTrialReminderWhisper(name) {
+        const trimmed = typeof name === "string" ? name.trim() : "";
+        if (!trimmed || /\s/.test(trimmed)) return null;
+        return `/w ${trimmed} ${TRIAL_REMINDER_MESSAGE}`;
+    }
+
     return {
+        TRIAL_REMINDER_MESSAGE,
+        buildTrialReminderWhisper,
         AURA_DEFINITIONS,
         UTILITY_DEFINITIONS,
         DAY_MS,
@@ -1444,7 +1454,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.11.7";
+    const SCRIPT_VERSION = "0.11.8";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1938,6 +1948,10 @@ function startGuildMonitor(Core) {
             .mwigm-command-primary { border-color: #4c9b82; background: #17634f; }
             .mwigm-command-primary:hover { background: #1d775f; }
             .mwigm-profile-button { flex: 0 0 auto; height: 26px; padding: 3px 8px; font-size: 11px; }
+            .mwigm-unsigned-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
+            .mwigm-unsigned-member { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 8px; border: 1px solid rgba(226, 168, 75, 0.35); border-radius: 4px; }
+            .mwigm-unsigned-member .mwigm-member-name { min-width: 0; overflow-wrap: anywhere; }
+            .mwigm-chat-draft-notice { margin-top: 6px; font-weight: 600; }
             .mwigm-missing-member-heading { display: flex; align-items: center; gap: 6px; width: 100%; }
             .mwigm-missing-member-heading .mwigm-member-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
             .mwigm-content { min-height: 0; flex: 1; overflow: auto; }
@@ -2433,7 +2447,10 @@ function startGuildMonitor(Core) {
             </div>
         `;
         const unsignedNotice = analysis.unsignedTrials.length
-            ? `<div class="mwigm-notice"><strong>No skilling or combat signup:</strong> ${escapeHtml(analysis.unsignedTrials.map((member) => member.name).join(", "))}</div>`
+            ? `<div class="mwigm-notice"><strong>No skilling or combat signup:</strong>
+                <div class="mwigm-unsigned-list">${analysis.unsignedTrials.map((member) => `<span class="mwigm-unsigned-member"><span class="mwigm-member-name">${escapeHtml(member.name)}</span><button class="mwigm-command mwigm-profile-button" type="button" data-action="remind-trial" data-member-id="${escapeHtml(member.id)}" title="Fill an empty game chat draft with a polite whisper reminder; you press Enter">Remind</button></span>`).join("")}</div>
+                <span class="mwigm-subtext">Remind fills an empty game chat draft with a whisper. Review it and press Enter yourself to send.</span>
+                ${state.profileDraftNotice ? `<div class="mwigm-profile-draft-notice mwigm-chat-draft-notice">${escapeHtml(state.profileDraftNotice)}</div>` : ""}</div>`
             : "";
         const skillingRows = analysis.skilling
             .filter((trial) => trial.name.toLocaleLowerCase().includes(query) || trial.signups.some((entry) => entry.memberName.toLocaleLowerCase().includes(query)))
@@ -2796,26 +2813,35 @@ function startGuildMonitor(Core) {
     }
 
     function prepareProfileDraft(memberId) {
+        prepareChatDraft(memberId, "Get profile", "profile chat command",
+            (name) => (!name || /[\r\n]/.test(name) ? null : `/profile ${name}`));
+    }
+
+    function prepareTrialReminderDraft(memberId) {
+        prepareChatDraft(memberId, "Remind", "whisper", Core.buildTrialReminderWhisper);
+    }
+
+    function prepareChatDraft(memberId, buttonLabel, commandLabel, buildCommand) {
         const member = currentAggregate().members.find((entry) => String(entry.id) === String(memberId));
         if (!member) return;
         const input = findGameChatInput();
         if (!input) {
-            state.profileDraftNotice = "Could not find one visible game chat box. Open chat, then try Get profile again.";
+            state.profileDraftNotice = `Could not find one visible game chat box. Open chat, then try ${buttonLabel} again.`;
             render();
             return;
         }
         const draft = input.isContentEditable ? input.textContent : input.value;
         if (draft) {
-            state.profileDraftNotice = "Chat already has a draft. Send or clear it first; Get profile will not overwrite it.";
+            state.profileDraftNotice = `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
             render();
             return;
         }
-        if (!member.name || /[\r\n]/.test(member.name)) {
-            state.profileDraftNotice = "This member's name cannot be used in a profile chat command.";
+        const command = buildCommand(member.name);
+        if (!command) {
+            state.profileDraftNotice = `This member's name cannot be used in a ${commandLabel}.`;
             render();
             return;
         }
-        const command = `/profile ${member.name}`;
         if (input.isContentEditable) {
             input.textContent = command;
         } else {
@@ -2916,6 +2942,9 @@ function startGuildMonitor(Core) {
         switch (control.dataset.action) {
             case "get-profile":
                 prepareProfileDraft(control.dataset.memberId);
+                break;
+            case "remind-trial":
+                prepareTrialReminderDraft(control.dataset.memberId);
                 break;
             case "close":
                 state.isOpen = false;

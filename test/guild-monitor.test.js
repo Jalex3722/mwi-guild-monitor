@@ -1101,3 +1101,19 @@ test("suggests first and second trial skills relative to guild medians", () => {
     assert.equal(babbage.first.trialHrid, "mine");
     assert.equal(babbage.second.trialHrid, "cook");
 });
+
+test("builds a polite trial reminder whisper for a member name", () => {
+    const whisper = Core.buildTrialReminderWhisper("Babbage");
+    assert.equal(whisper, `/w Babbage ${Core.TRIAL_REMINDER_MESSAGE}`);
+    assert.match(Core.TRIAL_REMINDER_MESSAGE, /sign up/i);
+    assert.match(Core.TRIAL_REMINDER_MESSAGE, /trial/i);
+    assert.doesNotMatch(Core.TRIAL_REMINDER_MESSAGE, /[\r\n]/);
+    assert.equal(Core.buildTrialReminderWhisper("  Curie "), `/w Curie ${Core.TRIAL_REMINDER_MESSAGE}`);
+});
+
+test("refuses trial reminder whispers for names that would break the command", () => {
+    assert.equal(Core.buildTrialReminderWhisper(""), null);
+    assert.equal(Core.buildTrialReminderWhisper(null), null);
+    assert.equal(Core.buildTrialReminderWhisper("Two Words"), null);
+    assert.equal(Core.buildTrialReminderWhisper("Line\nBreak"), null);
+});
