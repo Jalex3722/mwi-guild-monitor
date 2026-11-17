@@ -87,10 +87,17 @@ The **Trials** tab reads the current weekly trial set and the signup information
 - Guild-configured minimum level requirements
 - Combat role counts for each combat trial
 - Actual skilling signup rosters
+- An even-strength skilling trial plan in the **Planner** tab
 
 The Trials tab displays actual signup rosters and signup-time levels when available.
 
 The Trials signup tables show current slots and remaining capacity. Each skilling trial has `20 + 2 × Skilling Encampment level` slots; each combat trial has `40 + 4 × Combat Encampment level` slots. Capacity is shown as unknown until the client supplies guild building levels.
+
+### Skilling trial planner
+
+The **Planner** tab suggests an even-strength layout for this week's skilling trials only; combat trials are not planned. A trial's **strength** is the sum of its planned members' captured levels in that trial's skill, because skilling trial progress is a shared pool that every participant adds to. The planner first seats every eligible member it can, then raises the weakest trial's strength as far as possible, then the next weakest, and so on. It respects guild minimum levels, signup slot caps, and the rule that members who joined after the guild week started cannot sign up. Small guilds are solved exactly; larger guilds use a deterministic local search that stays within a few levels of an even split.
+
+Each trial lists its planned members (highest level first) with a colored dot: green when already signed for that trial, yellow when signed for a different skilling trial, red when not signed for any skilling trial. **Suggested changes** lists everyone whose current signup differs from the plan, and **Not in the plan** explains anyone left out (missing profile, below every minimum, joined this week, or no open slot). The plan is a suggestion only. It does not change signups, and it does not model gear, tools, buffs, or availability. To hide it, set `SKILLING_PLANNER_ENABLED` to `false` in the script.
 
 The **Results** tab keeps a rolling 12-week local record of trial status, highest cleared tier, and Guild Points reported in the game's current trial state. Each week header shows the total observed points across that week's scored trials, even when collapsed; scheduled or unscored trials do not contribute. Each week can be expanded or collapsed independently; the newest observed week opens by default. It records only weeks observed by this browser while the script runs; it cannot reconstruct unobserved past results.
 

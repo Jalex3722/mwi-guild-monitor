@@ -1385,7 +1385,307 @@
         return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     }
 
-    const TRIAL_REMINDER_MESSAGE = "Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
+    // ---- Skilling trial planner (self-contained) -------------------------------------
+    // Suggests an even-strength layout for this week's skilling trials. A trial's strength
+    // is the sum of its planned members' captured levels in that skill, because skilling
+    // trial progress is a shared, additive pool. The plan raises the weakest trial as far
+    // as possible, then the next weakest, and so on (leximin), while respecting guild
+    // minimum levels, signup slot caps, and week eligibility. It reads data only.
+    // To revert: delete this block, its export, and the Planner tab (SKILLING_PLANNER_ENABLED).
+    const PLANNER_EPSILON = 1e-9;
+    const PLANNER_MAX_ITERATIONS = 2000;
+    const PLANNER_EXACT_LIMIT = 400_000;
+
+    function planSkillingTrials({ trials = [], members = [], guildWeekStartAt = null, exactSearchLimit = PLANNER_EXACT_LIMIT } = {}) {
+        const weekStart = toTimestamp(guildWeekStartAt);
+        const capacities = trials.map((trial) => (Number.isFinite(trial.capacity) && trial.capacity >= 0 ? trial.capacity : Infinity));
+        const signupByMember = new Map();
+        trials.forEach((trial) => (trial.signups || []).forEach((entry) => signupByMember.set(String(entry.memberId), trial.trialHrid)));
+
+        const unplanned = [];
+        const candidates = [];
+        members.forEach((member) => {
+            const base = {
+                memberId: member.id,
+                memberName: member.name,
+                currentTrialHrid: signupByMember.get(String(member.id)) || "",
+            };
+            const joinedAt = toTimestamp(member.joinedAt);
+            if (weekStart !== null && joinedAt !== null && joinedAt > weekStart) {
+                unplanned.push({ ...base, reason: "joinedThisWeek" });
+                return;
+            }
+            if (!member.profile || !Array.isArray(member.profile.skills) || !member.profile.skills.length) {
+                unplanned.push({ ...base, reason: "missingProfile" });
+                return;
+            }
+            const levels = trials.map((trial) => {
+                const level = getProfileSkillLevel(member, trial.skillHrid);
+                return Number.isFinite(level) && trialAllowsLevel(trial, level) ? level : null;
+            });
+            if (levels.every((level) => level === null)) {
+                unplanned.push({ ...base, reason: "belowMinimum" });
+                return;
+            }
+            const bestLevel = Math.max(...levels.filter((level) => level !== null));
+            candidates.push({ ...base, levels, bestLevel, bestIndex: levels.indexOf(bestLevel) });
+        });
+
+        const ordered = [...candidates].sort((left, right) => right.bestLevel - left.bestLevel || left.memberName.localeCompare(right.memberName));
+        const best = (trials.length + 1) ** ordered.length <= exactSearchLimit
+            ? exactPlannerSearch(ordered, trials.length, capacities)
+            : searchPlannerLayouts(ordered, trials.length, capacities);
+
+        const assignmentById = new Map();
+        ordered.forEach((candidate, index) => {
+            const trialIndex = best ? best.assignment[index] : -1;
+            if (trialIndex === -1) unplanned.push({ memberId: candidate.memberId, memberName: candidate.memberName, currentTrialHrid: candidate.currentTrialHrid, reason: "noOpenSlot" });
+            else assignmentById.set(String(candidate.memberId), { candidate, trialIndex });
+        });
+
+        const statusFor = (candidate, trialHrid) => candidate.currentTrialHrid === trialHrid ? "here" : candidate.currentTrialHrid ? "elsewhere" : "unsigned";
+        const plannedTrials = trials.map((trial, trialIndex) => {
+            const plannedMembers = [...assignmentById.values()]
+                .filter((entry) => entry.trialIndex === trialIndex)
+                .map(({ candidate }) => ({
+                    memberId: candidate.memberId,
+                    memberName: candidate.memberName,
+                    level: candidate.levels[trialIndex],
+                    currentTrialHrid: candidate.currentTrialHrid,
+                    status: statusFor(candidate, trial.trialHrid),
+                    bestTrialHrid: trials[candidate.bestIndex].trialHrid,
+                    bestLevel: candidate.bestLevel,
+                }))
+                .sort((left, right) => right.level - left.level || left.memberName.localeCompare(right.memberName));
+            const strength = plannedMembers.reduce((sum, entry) => sum + entry.level, 0);
+            return {
+                trialHrid: trial.trialHrid,
+                name: trial.name,
+                skillHrid: trial.skillHrid,
+                minLevel: trial.minLevel || 0,
+                capacity: Number.isFinite(trial.capacity) ? trial.capacity : null,
+                members: plannedMembers,
+                plannedCount: plannedMembers.length,
+                strength,
+                averageLevel: plannedMembers.length ? strength / plannedMembers.length : null,
+            };
+        });
+        const trialNameByHrid = new Map(trials.map((trial) => [trial.trialHrid, trial.name]));
+        const changes = plannedTrials
+            .flatMap((trial) => trial.members.filter((entry) => entry.status !== "here").map((entry) => ({
+                ...entry,
+                plannedTrialHrid: trial.trialHrid,
+                plannedTrialName: trial.name,
+                currentTrialName: entry.currentTrialHrid ? trialNameByHrid.get(entry.currentTrialHrid) || entry.currentTrialHrid : "",
+            })))
+            .sort((left, right) => (left.status === "unsigned") - (right.status === "unsigned") || left.memberName.localeCompare(right.memberName));
+        const strengths = plannedTrials.map((trial) => trial.strength);
+        const reasonOrder = ["noOpenSlot", "belowMinimum", "joinedThisWeek", "missingProfile"];
+
+        return {
+            trials: plannedTrials,
+            changes,
+            unplanned: unplanned
+                .map((entry) => ({ ...entry, currentTrialName: entry.currentTrialHrid ? trialNameByHrid.get(entry.currentTrialHrid) || entry.currentTrialHrid : "" }))
+                .sort((left, right) => reasonOrder.indexOf(left.reason) - reasonOrder.indexOf(right.reason) || left.memberName.localeCompare(right.memberName)),
+            plannedCount: assignmentById.size,
+            weakestStrength: strengths.length ? Math.min(...strengths) : null,
+            strongestStrength: strengths.length ? Math.max(...strengths) : null,
+        };
+    }
+
+    // Ranks plans: more members seated first, then the leximin strength order.
+    function comparePlannerPlans(left, right) {
+        const seated = (plan) => plan.assignment.filter((index) => index !== -1).length;
+        return seated(left) - seated(right) || comparePlannerStrengths(left.strengths, right.strengths);
+    }
+
+    // Small guilds: try every layout (including leaving someone out when slots force it).
+    function exactPlannerSearch(candidates, trialCount, capacities) {
+        const assignment = Array(candidates.length).fill(-1);
+        const strengths = Array(trialCount).fill(0);
+        const counts = Array(trialCount).fill(0);
+        let best = null;
+        const visit = (memberIndex) => {
+            if (memberIndex === candidates.length) {
+                const plan = { assignment: [...assignment], strengths: [...strengths] };
+                if (!best || comparePlannerPlans(plan, best) > 0) best = plan;
+                return;
+            }
+            const levels = candidates[memberIndex].levels;
+            for (let trial = 0; trial < trialCount; trial += 1) {
+                if (levels[trial] === null || counts[trial] >= capacities[trial]) continue;
+                assignment[memberIndex] = trial;
+                strengths[trial] += levels[trial];
+                counts[trial] += 1;
+                visit(memberIndex + 1);
+                strengths[trial] -= levels[trial];
+                counts[trial] -= 1;
+            }
+            assignment[memberIndex] = -1;
+            visit(memberIndex + 1);
+        };
+        visit(0);
+        return best;
+    }
+
+    // Larger guilds: local search from several deterministic starting layouts.
+    function searchPlannerLayouts(candidates, trialCount, capacities) {
+        const starts = [
+            buildPlannerStart(candidates, trialCount, capacities, (candidate, strengths, counts) =>
+                pickPlannerTrial(candidate, counts, capacities, (index) => candidate.levels[index])),
+            buildPlannerStart(candidates, trialCount, capacities, (candidate, strengths, counts) =>
+                pickPlannerTrial(candidate, counts, capacities, (index) => -strengths[index] + candidate.levels[index] * PLANNER_EPSILON)),
+        ];
+        const restarts = candidates.length <= 40 ? 6 : 2;
+        let seed = 1;
+        const random = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+        for (let restart = 0; restart < restarts; restart += 1) {
+            const order = candidates.map((_, index) => index);
+            for (let index = order.length - 1; index > 0; index -= 1) {
+                const swapIndex = Math.floor(random() * (index + 1));
+                [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
+            }
+            const strengths = Array(trialCount).fill(0);
+            const counts = Array(trialCount).fill(0);
+            const start = Array(candidates.length).fill(-1);
+            order.forEach((memberIndex) => {
+                const candidate = candidates[memberIndex];
+                const trial = pickPlannerTrial(candidate, counts, capacities, (index) => -strengths[index] + candidate.levels[index] * PLANNER_EPSILON);
+                if (trial === -1) return;
+                start[memberIndex] = trial;
+                strengths[trial] += candidate.levels[trial];
+                counts[trial] += 1;
+            });
+            starts.push(start);
+        }
+        return starts
+            .map((start) => improvePlannerAssignment(candidates, placeEveryonePossible(candidates, start, trialCount, capacities), trialCount, capacities))
+            .reduce((winner, plan) => (!winner || comparePlannerPlans(plan, winner) > 0 ? plan : winner), null);
+    }
+
+    function pickPlannerTrial(candidate, counts, capacities, score) {
+        let chosen = -1;
+        candidate.levels.forEach((level, index) => {
+            if (level === null || counts[index] >= capacities[index]) return;
+            if (chosen === -1 || score(index) > score(chosen) + PLANNER_EPSILON) chosen = index;
+        });
+        return chosen;
+    }
+
+    function buildPlannerStart(candidates, trialCount, capacities, choose) {
+        const strengths = Array(trialCount).fill(0);
+        const counts = Array(trialCount).fill(0);
+        return candidates.map((candidate) => {
+            const index = choose(candidate, strengths, counts);
+            if (index !== -1) {
+                strengths[index] += candidate.levels[index];
+                counts[index] += 1;
+            }
+            return index;
+        });
+    }
+
+    // Augmenting paths (Kuhn's algorithm with slot caps): seat anyone left without a slot by
+    // moving already-seated members along a chain of trials they also qualify for.
+    function placeEveryonePossible(candidates, startAssignment, trialCount, capacities) {
+        const assignment = [...startAssignment];
+        const counts = Array(trialCount).fill(0);
+        assignment.forEach((trialIndex) => { if (trialIndex !== -1) counts[trialIndex] += 1; });
+        const tryPlace = (memberIndex, visitedTrials) => {
+            const levels = candidates[memberIndex].levels;
+            for (let trial = 0; trial < trialCount; trial += 1) {
+                if (levels[trial] === null || trial === assignment[memberIndex] || counts[trial] >= capacities[trial]) continue;
+                return seat(memberIndex, trial);
+            }
+            for (let trial = 0; trial < trialCount; trial += 1) {
+                if (levels[trial] === null || trial === assignment[memberIndex] || visitedTrials.has(trial)) continue;
+                visitedTrials.add(trial);
+                const occupant = assignment.findIndex((value, index) => value === trial && index !== memberIndex && tryPlace(index, visitedTrials));
+                if (occupant !== -1) return seat(memberIndex, trial);
+            }
+            return false;
+        };
+        const seat = (memberIndex, trial) => {
+            if (assignment[memberIndex] !== -1) counts[assignment[memberIndex]] -= 1;
+            assignment[memberIndex] = trial;
+            counts[trial] += 1;
+            return true;
+        };
+        assignment.forEach((trialIndex, memberIndex) => {
+            if (trialIndex === -1) tryPlace(memberIndex, new Set());
+        });
+        return assignment;
+    }
+
+    // Leximin comparison: positive when `left` has a stronger weakest trial (then second weakest, ...).
+    function comparePlannerStrengths(left, right) {
+        const sortedLeft = [...left].sort((a, b) => a - b);
+        const sortedRight = [...right].sort((a, b) => a - b);
+        for (let index = 0; index < sortedLeft.length; index += 1) {
+            const difference = sortedLeft[index] - sortedRight[index];
+            if (Math.abs(difference) > PLANNER_EPSILON) return difference;
+        }
+        return 0;
+    }
+
+    // Steepest-ascent local search over single moves and pairwise swaps.
+    function improvePlannerAssignment(candidates, startAssignment, trialCount, capacities) {
+        const assignment = [...startAssignment];
+        const strengths = Array(trialCount).fill(0);
+        const counts = Array(trialCount).fill(0);
+        assignment.forEach((trialIndex, memberIndex) => {
+            if (trialIndex === -1) return;
+            strengths[trialIndex] += candidates[memberIndex].levels[trialIndex];
+            counts[trialIndex] += 1;
+        });
+
+        for (let iteration = 0; iteration < PLANNER_MAX_ITERATIONS; iteration += 1) {
+            let bestChange = null;
+            let bestStrengths = strengths;
+            const consider = (change, nextStrengths) => {
+                if (comparePlannerStrengths(nextStrengths, bestStrengths) > 0) {
+                    bestChange = change;
+                    bestStrengths = nextStrengths;
+                }
+            };
+            for (let memberIndex = 0; memberIndex < candidates.length; memberIndex += 1) {
+                const from = assignment[memberIndex];
+                const levels = candidates[memberIndex].levels;
+                for (let to = 0; to < trialCount; to += 1) {
+                    if (to === from || levels[to] === null || counts[to] >= capacities[to]) continue;
+                    const next = [...strengths];
+                    if (from !== -1) next[from] -= levels[from];
+                    next[to] += levels[to];
+                    consider({ type: "move", memberIndex, from, to }, next);
+                }
+                if (from === -1) continue;
+                for (let otherIndex = memberIndex + 1; otherIndex < candidates.length; otherIndex += 1) {
+                    const other = assignment[otherIndex];
+                    const otherLevels = candidates[otherIndex].levels;
+                    if (other === -1 || other === from || levels[other] === null || otherLevels[from] === null) continue;
+                    const next = [...strengths];
+                    next[from] += otherLevels[from] - levels[from];
+                    next[other] += levels[other] - otherLevels[other];
+                    consider({ type: "swap", memberIndex, otherIndex, from, to: other }, next);
+                }
+            }
+            if (!bestChange) break;
+            if (bestChange.type === "move") {
+                assignment[bestChange.memberIndex] = bestChange.to;
+                if (bestChange.from !== -1) counts[bestChange.from] -= 1;
+                counts[bestChange.to] += 1;
+            } else {
+                assignment[bestChange.memberIndex] = bestChange.to;
+                assignment[bestChange.otherIndex] = bestChange.from;
+            }
+            bestStrengths.forEach((value, index) => { strengths[index] = value; });
+        }
+        return { assignment, strengths };
+    }
+    // ---- End skilling trial planner ---------------------------------------------------
+
+    const TRIAL_REMINDER_MESSAGE ="Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
 
     function buildTrialReminderWhisper(name) {
         const trimmed = typeof name === "string" ? name.trim() : "";
@@ -1394,6 +1694,7 @@
     }
 
     return {
+        planSkillingTrials,
         TRIAL_REMINDER_MESSAGE,
         buildTrialReminderWhisper,
         AURA_DEFINITIONS,
@@ -1455,6 +1756,8 @@ function startGuildMonitor(Core) {
 
     const SCRIPT_ID = "mwi-guild-monitor";
     const SCRIPT_VERSION = "0.11.9";
+    // Set to false to hide the skilling trial Planner tab without touching anything else.
+    const SKILLING_PLANNER_ENABLED = true;
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1965,6 +2268,16 @@ function startGuildMonitor(Core) {
             .mwigm-unsigned-member { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 3px 3px 8px; border: 1px solid rgba(226, 168, 75, 0.35); border-radius: 4px; }
             .mwigm-unsigned-member .mwigm-member-name { min-width: 0; overflow-wrap: anywhere; }
             .mwigm-chat-draft-notice { margin-top: 6px; font-weight: 600; }
+            .mwigm-plan-table { min-width: 720px; }
+            .mwigm-table td.mwigm-plan-members { text-align: left; }
+            .mwigm-plan-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 12px; font-size: 11px; }
+            #${SCRIPT_ID}-panel .mwigm-plan-member { display: inline-block; margin: 0 10px 3px 0; font-weight: 600; white-space: nowrap; }
+            #${SCRIPT_ID}-panel .mwigm-plan-member::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+            #${SCRIPT_ID}-panel .mwigm-plan-here { color: #77d2b2; }
+            #${SCRIPT_ID}-panel .mwigm-plan-elsewhere { color: #efbd70; }
+            #${SCRIPT_ID}-panel .mwigm-plan-unsigned { color: #f19a91; }
+            .mwigm-plan-level { color: #aebbd0; font-weight: 400; }
+            .mwigm-plan-current { color: #efbd70; font-weight: 600; }
             .mwigm-missing-member-heading { display: flex; align-items: center; gap: 6px; width: 100%; }
             .mwigm-missing-member-heading .mwigm-member-name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
             .mwigm-content { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
@@ -2145,6 +2458,7 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="members">Members</button>
                 <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
+                ${SKILLING_PLANNER_ENABLED ? `<button class="mwigm-tab" type="button" data-tab="planner">Planner</button>` : ""}
                 <button class="mwigm-tab" type="button" data-tab="results">Results</button>
                 <button class="mwigm-tab" type="button" data-tab="guild">Guild</button>
                 <button class="mwigm-tab" type="button" data-tab="shrines">Shrines</button>
@@ -2264,8 +2578,8 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "guild" ? "Find a building or shrine" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
-        if (state.activeTab === "results") {
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" || state.activeTab === "planner" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "guild" ? "Find a building or shrine" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
+        if (state.activeTab === "results" || state.activeTab === "planner") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">`;
         }
         if (state.activeTab === "shrines") {
@@ -2306,6 +2620,7 @@ function startGuildMonitor(Core) {
         }
         if (state.activeTab === "members") return renderMembers(aggregate);
         if (state.activeTab === "trials") return renderTrials(aggregate);
+        if (state.activeTab === "planner" && SKILLING_PLANNER_ENABLED) return renderPlanner(aggregate);
         if (state.activeTab === "results") return renderResults();
         if (state.activeTab === "auras") return renderAuras(aggregate);
         if (state.activeTab === "shrines") return renderShrines();
@@ -2511,6 +2826,99 @@ function startGuildMonitor(Core) {
             <div class="mwigm-section-title">Combat trials <span>Role mix and combat level</span></div>
             <table class="mwigm-table"><thead><tr><th style="width:34%">Trial</th><th>Slots</th><th>Average</th><th colspan="2">Roles</th></tr></thead><tbody>${combatRows || emptyTableRow(5)}</tbody></table>
             ${renderCombatAuraCoverage(analysis)}
+        `;
+    }
+
+    // ---- Skilling trial Planner tab (see SKILLING_PLANNER_ENABLED) ----
+    let plannerCache = null;
+
+    function currentSkillingPlan(aggregate, analysis) {
+        const weekStart = Core.resolveGuildWeekStart(state.guild);
+        const key = [
+            weekStart,
+            ...analysis.skilling.map((trial) => `${trial.trialHrid}:${trial.minLevel}:${trial.capacity}:${trial.signups.map((entry) => entry.memberId).join(".")}`),
+            ...aggregate.members.map((member) => `${member.id}:${member.profile?.capturedAt || 0}:${member.joinedAt || ""}`),
+        ].join("|");
+        if (plannerCache && plannerCache.key === key) return plannerCache.plan;
+        const plan = Core.planSkillingTrials({ trials: analysis.skilling, members: aggregate.members, guildWeekStartAt: weekStart });
+        plannerCache = { key, plan };
+        return plan;
+    }
+
+    function renderPlanner(aggregate) {
+        const analysis = currentTrialAnalysis(aggregate);
+        if (!analysis.hasTrialData) {
+            return emptyState("Waiting for weekly trials", "Reload the game or open Guild > Trials so the current trial set is available.");
+        }
+        if (!analysis.skilling.length) {
+            return emptyState("No skilling trials this week", "The current weekly set has no skilling trials to plan.");
+        }
+        const plan = currentSkillingPlan(aggregate, analysis);
+        const query = state.query.toLocaleLowerCase();
+        const matches = (...values) => !query || values.some((value) => String(value || "").toLocaleLowerCase().includes(query));
+        const statusLabel = { here: "Already signed here", elsewhere: "Signed for another skilling trial", unsigned: "No skilling signup" };
+        const reasonLabel = {
+            noOpenSlot: "No open slot left in an eligible trial",
+            belowMinimum: "Below every trial's guild minimum level",
+            joinedThisWeek: "Joined after this guild week started",
+            missingProfile: "Profile not captured",
+        };
+        const spread = Number.isFinite(plan.weakestStrength) ? plan.strongestStrength - plan.weakestStrength : null;
+        const missingCount = plan.unplanned.filter((entry) => entry.reason === "missingProfile").length;
+
+        const overview = `
+            <div class="mwigm-status">
+                ${metric("Planned", `${plan.plannedCount}/${aggregate.memberCount}`)}
+                ${metric("Weakest trial", plan.weakestStrength === null ? "--" : formatExactNumber(plan.weakestStrength))}
+                ${metric("Strength spread", spread === null ? "--" : formatExactNumber(spread))}
+                ${metric("Suggested changes", plan.changes.length)}
+            </div>`;
+        const explainer = `<div class="mwigm-notice mwigm-notice-info"><strong>Even-strength skilling plan.</strong> A trial's strength is the sum of its planned members' captured levels in that skill, since trial progress is shared. The plan raises the weakest trial as far as possible, then the next weakest, and respects guild minimum levels and signup slots. It is a suggestion only: no signups are changed, and gear, buffs, and availability are not modeled.</div>`;
+        const missingNotice = missingCount
+            ? `<div class="mwigm-notice"><strong>${missingCount} member${missingCount === 1 ? "" : "s"} without a captured profile ${missingCount === 1 ? "is" : "are"} left out of the plan.</strong> Capture their profiles for a complete layout.<br><button class="mwigm-command" type="button" data-tab="missing">View missing profiles</button></div>`
+            : "";
+        const plannedName = (entry) => `<span class="mwigm-plan-member mwigm-plan-${entry.status}" title="${escapeHtml(statusLabel[entry.status])}">${escapeHtml(entry.memberName)} <span class="mwigm-plan-level">${entry.level}</span></span>`;
+        const trialRows = plan.trials
+            .filter((trial) => matches(trial.name, ...trial.members.map((entry) => entry.memberName)))
+            .map((trial) => {
+                const slots = trial.capacity === null ? `${trial.plannedCount}` : `${trial.plannedCount}/${trial.capacity}`;
+                const minimum = trial.minLevel ? `<span class="mwigm-subtext mwigm-roster-names">Guild minimum ${trial.minLevel}</span>` : "";
+                const isWeakest = plan.trials.length > 1 && trial.strength === plan.weakestStrength;
+                return `<tr>
+                    <td><span class="mwigm-trial-name">${escapeHtml(trial.name)}</span>${isWeakest ? ` <span class="mwigm-chip mwigm-chip-warn">Weakest</span>` : ""}${minimum}</td>
+                    <td><strong>${slots}</strong></td>
+                    <td><strong>${formatExactNumber(trial.strength)}</strong></td>
+                    <td>${trial.averageLevel === null ? "--" : trial.averageLevel.toFixed(1)}</td>
+                    <td class="mwigm-plan-members">${trial.members.map(plannedName).join("") || `<span class="mwigm-muted">No eligible members</span>`}</td>
+                </tr>`;
+            }).join("");
+        const changeRows = plan.changes
+            .filter((entry) => matches(entry.memberName, entry.plannedTrialName, entry.currentTrialName))
+            .map((entry) => `<tr>
+                <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span></td>
+                <td><span class="${entry.status === "unsigned" ? "mwigm-trial-none" : "mwigm-plan-current"}">${escapeHtml(entry.currentTrialName || "No skilling signup")}</span></td>
+                <td><span class="mwigm-trial-signed">${escapeHtml(entry.plannedTrialName)}</span></td>
+                <td>${entry.level}${entry.bestLevel > entry.level ? `<span class="mwigm-subtext mwigm-roster-names">Best this week: ${entry.bestLevel}</span>` : ""}</td>
+            </tr>`).join("");
+        const unplannedRows = plan.unplanned
+            .filter((entry) => matches(entry.memberName, entry.currentTrialName))
+            .map((entry) => `<tr>
+                <td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span></td>
+                <td>${escapeHtml(reasonLabel[entry.reason] || entry.reason)}</td>
+                <td>${escapeHtml(entry.currentTrialName || "No skilling signup")}</td>
+            </tr>`).join("");
+
+        return `
+            ${overview}
+            ${explainer}
+            ${missingNotice}
+            <div class="mwigm-section-title">Planned skilling rosters <span>Highest level first</span></div>
+            <div class="mwigm-plan-legend"><span class="mwigm-plan-member mwigm-plan-here">Signed here</span><span class="mwigm-plan-member mwigm-plan-elsewhere">Signed elsewhere</span><span class="mwigm-plan-member mwigm-plan-unsigned">Not signed</span><span class="mwigm-subtext">Number = level in that skill</span></div>
+            <table class="mwigm-table mwigm-plan-table"><thead><tr><th style="width:20%">Trial</th><th style="width:10%">Planned</th><th style="width:11%">Strength</th><th style="width:10%">Average</th><th style="width:49%">Members</th></tr></thead><tbody>${trialRows || emptyTableRow(5)}</tbody></table>
+            <div class="mwigm-section-title">Suggested changes <span>Members not yet signed for their planned trial</span></div>
+            <table class="mwigm-table"><thead><tr><th style="width:28%">Member</th><th>Signed now</th><th>Planned trial</th><th>Planned level</th></tr></thead><tbody>${changeRows || `<tr><td class="mwigm-no-results" colspan="4">${plan.changes.length ? "No matching data" : "Everyone planned is already signed for their planned trial"}</td></tr>`}</tbody></table>
+            ${plan.unplanned.length ? `<div class="mwigm-section-title">Not in the plan <span>${plan.unplanned.length} member${plan.unplanned.length === 1 ? "" : "s"}</span></div>
+            <table class="mwigm-table"><thead><tr><th style="width:28%">Member</th><th>Reason</th><th>Signed now</th></tr></thead><tbody>${unplannedRows || emptyTableRow(3)}</tbody></table>` : ""}
         `;
     }
 
