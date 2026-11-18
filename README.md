@@ -7,6 +7,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 ## Features
 
 - Guild roster with role, online state, guild XP, and weekly XP when supplied by the game
+- Guild level, guild exp, measured guild exp per hour, and time to the next level and next member slot
 - Member activity, 3-day offline warnings, strongest captured skill, and color-coded current trial signups
 - Average, median, minimum, and maximum level for every captured skill
 - Visible highest-level member names and counts above levels 100, 125, and 150
@@ -45,7 +46,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.14.0`.
+The monitor header displays its running version. The current release is `v0.15.0`.
 
 ## Collecting member skill data
 
@@ -60,7 +61,7 @@ The **Get profile** button at the right side of each member in Missing profiles 
 
 The **Recruit message** button at the top of the monitor fills the game's *empty* chat draft with this recruitment post, where `[g@]` is the game's chat link to your guild:
 
-> We're looking for YOU to join [g@]! We're a top 30 guild in Guild Points with relaxed requirements, and no one gets kicked as long as you're online and signing up for trials. Hope you apply! :)
+> [g@] We're looking for YOU to join! We're a top 30 guild in Guild Points with relaxed requirements, and no one gets kicked as long as you're online and signing up for trials. Hope you apply! :)
 
 Switch the chat to the Recruit channel, review or edit the draft, and press Enter yourself. It never sends the message or overwrites an existing draft. The message text is fixed in the script (`RECRUIT_MESSAGE`); update it there if your guild's ranking or rules change.
 
@@ -109,6 +110,8 @@ Combat recommendations are not generated. Combat level alone cannot account for 
 The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
 
 ## Guild Points, buildings, and leaderboards
+
+The **Guild** tab opens with a **Guild level** row: the current level and progress through it, total guild exp, guild exp per hour, and the next member slot with an estimated time to reach it. A member slot opens every 3 guild levels (levels 3, 6, 9, ...). Level thresholds come from the game's `levelExperienceTable` client definition. Exp per hour is measured, not estimated from members: each guild update the game sends records the guild's exp and its `updatedAt` time locally, and the rate covers up to the last 24 hours of those samples. It shows *Measuring* until at least 15 minutes of updates have been seen, so keep the game open for a while after installing or updating. Times to the next level and slot assume that rate continues.
 
 The **Guild** tab shows available and lifetime Guild Points from the current guild state and this week's observed trial points. It lists all building and shrine levels known to the game client. Next-upgrade costs, affordability gaps, total cost to max level, and expandable per-level Guild Point costs use the game's building and shrine definitions. Unknown costs remain blank rather than estimated.
 

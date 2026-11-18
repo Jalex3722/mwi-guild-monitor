@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.14.0
+// @version      0.15.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -610,6 +610,7 @@
         let guildBuildingDetails = {};
         let guildShrineDetails = {};
         let leaderboardTypeDetails = {};
+        let levelExperienceTable = [];
 
         while (pending.length && visited.size < 24) {
             const raw = pending.shift();
@@ -631,12 +632,13 @@
             if (Object.keys(buildings).length) guildBuildingDetails = buildings;
             if (Object.keys(shrines).length) guildShrineDetails = shrines;
             if (Object.keys(types).length) leaderboardTypeDetails = types;
+            if (Array.isArray(value.levelExperienceTable) && value.levelExperienceTable.length) levelExperienceTable = value.levelExperienceTable;
             ["data", "payload", "message", "initClientData", "clientData", "gameData"].forEach((key) => {
                 if (value[key]) pending.push(value[key]);
             });
         }
 
-        return { itemDetails, guildBuffDetails, guildBuildingDetails, guildShrineDetails, leaderboardTypeDetails };
+        return { itemDetails, guildBuffDetails, guildBuildingDetails, guildShrineDetails, leaderboardTypeDetails, levelExperienceTable };
     }
 
     function analyzeGuildEconomy({
@@ -908,6 +910,87 @@
         const current = { available: Number.isFinite(available) ? Math.floor(available) : null, lifetime: Number.isFinite(lifetime) ? Math.floor(lifetime) : null, observedAt };
         const latest = previous[previous.length - 1];
         return latest && latest.available === current.available && latest.lifetime === current.lifetime ? previous : [...previous, current].slice(-60);
+    }
+
+    // Guild exp samples: { level, experience, observedAt }. The game's guild.updatedAt is used as the
+    // sample time when present so reloads do not distort the rate. A new sample replaces the newest
+    // one while that one is under 5 minutes after the sample before it, keeping samples ~5 minutes apart.
+    const GUILD_EXP_SAMPLE_SPACING_MS = 5 * 60_000;
+    const GUILD_EXP_HISTORY_LIMIT = 400;
+    const GUILD_EXP_RATE_WINDOW_MS = DAY_MS;
+    const GUILD_EXP_RATE_MIN_SPAN_MS = 15 * 60_000;
+    const GUILD_LEVELS_PER_MEMBER_SLOT = 3;
+
+    function recordGuildExperienceHistory(history, guild, observedAt = Date.now()) {
+        const source = Array.isArray(history) ? history : [];
+        const previous = source.filter((sample) => sample && Number.isFinite(sample.experience) && Number.isFinite(sample.observedAt));
+        if (!guild) return source;
+        const experience = Number(guild.experience);
+        const level = Number(guild.level);
+        if (guild.experience === null || guild.experience === undefined || !Number.isFinite(experience)) return source;
+        const updatedAt = toTimestamp(guild.updatedAt);
+        const current = { level: Number.isSafeInteger(level) ? level : null, experience, observedAt: updatedAt ?? observedAt };
+        const latest = previous[previous.length - 1];
+        if (latest && current.observedAt <= latest.observedAt) {
+            if (latest.experience === current.experience) return source;
+            if (current.observedAt < latest.observedAt) return source;
+        }
+        const beforeLatest = previous[previous.length - 2];
+        const replaceLatest = latest && beforeLatest && latest.observedAt - beforeLatest.observedAt < GUILD_EXP_SAMPLE_SPACING_MS;
+        const next = replaceLatest ? [...previous.slice(0, -1), current] : [...previous, current];
+        const cutoff = current.observedAt - 7 * DAY_MS;
+        return next.filter((sample) => sample.observedAt >= cutoff).slice(-GUILD_EXP_HISTORY_LIMIT);
+    }
+
+    function estimateGuildExperienceRate(history) {
+        const samples = (Array.isArray(history) ? history : []).filter((sample) => sample && Number.isFinite(sample.experience) && Number.isFinite(sample.observedAt));
+        const latest = samples[samples.length - 1];
+        if (!latest) return null;
+        const reference = samples.find((sample) => sample.observedAt >= latest.observedAt - GUILD_EXP_RATE_WINDOW_MS);
+        const spanMs = latest.observedAt - reference.observedAt;
+        if (spanMs < GUILD_EXP_RATE_MIN_SPAN_MS) return null;
+        const gained = latest.experience - reference.experience;
+        if (gained < 0) return null;
+        return { perHour: gained / (spanMs / HOUR_MS), spanMs, fromAt: reference.observedAt, toAt: latest.observedAt };
+    }
+
+    function analyzeGuildLevel(guild, levelExperienceTable, rate = null) {
+        const table = Array.isArray(levelExperienceTable) ? levelExperienceTable : [];
+        const level = Number(guild && guild.level);
+        const rawExperience = guild ? guild.experience : null;
+        const experience = rawExperience === null || rawExperience === undefined ? NaN : Number(rawExperience);
+        const known = Number.isSafeInteger(level) && level > 0;
+        const expAt = (targetLevel) => {
+            const value = Number(table[targetLevel]);
+            return table[targetLevel] !== null && table[targetLevel] !== undefined && Number.isFinite(value) ? value : null;
+        };
+        const perHour = rate && Number.isFinite(rate.perHour) ? rate.perHour : null;
+        const hoursFor = (needed) => needed === null ? null : needed === 0 ? 0 : perHour > 0 ? needed / perHour : null;
+        const remainingTo = (targetLevel) => {
+            const target = expAt(targetLevel);
+            return target === null || !Number.isFinite(experience) ? null : Math.max(0, target - experience);
+        };
+        const nextLevel = known ? level + 1 : null;
+        const nextSlotLevel = known ? Math.ceil((level + 1) / GUILD_LEVELS_PER_MEMBER_SLOT) * GUILD_LEVELS_PER_MEMBER_SLOT : null;
+        const levelStart = known ? expAt(level) : null;
+        const levelEnd = known ? expAt(nextLevel) : null;
+        const progress = levelStart !== null && levelEnd !== null && levelEnd > levelStart && Number.isFinite(experience)
+            ? Math.min(1, Math.max(0, (experience - levelStart) / (levelEnd - levelStart)))
+            : null;
+        const expToNextLevel = known ? remainingTo(nextLevel) : null;
+        const expToNextSlot = known ? remainingTo(nextSlotLevel) : null;
+        return {
+            level: known ? level : null,
+            experience: Number.isFinite(experience) ? experience : null,
+            perHour,
+            progress,
+            nextLevel,
+            expToNextLevel,
+            hoursToNextLevel: hoursFor(expToNextLevel),
+            nextSlotLevel,
+            expToNextSlot,
+            hoursToNextSlot: hoursFor(expToNextSlot),
+        };
     }
 
     function recordLeaderboardObservation(observations, message, guild, roster = [], typeDetails = {}, observedAt = Date.now()) {
@@ -1420,7 +1503,7 @@
     // ---- Recruitment chat message ----
     // `[g@]` is the game's chat token that links your own guild.
     const GUILD_CHAT_LINK = "[g@]";
-    const RECRUIT_MESSAGE = `We're looking for YOU to join ${GUILD_CHAT_LINK}! We're a top 30 guild in Guild Points with relaxed requirements, and no one gets kicked as long as you're online and signing up for trials. Hope you apply! :)`;
+    const RECRUIT_MESSAGE = `${GUILD_CHAT_LINK} We're looking for YOU to join! We're a top 30 guild in Guild Points with relaxed requirements, and no one gets kicked as long as you're online and signing up for trials. Hope you apply! :)`;
 
     function buildRecruitMessage() {
         return RECRUIT_MESSAGE;
@@ -1483,6 +1566,10 @@
         recordWeeklyTrialParticipation,
         recordWeeklyTrialResults,
         recordGuildPointsHistory,
+        recordGuildExperienceHistory,
+        estimateGuildExperienceRate,
+        analyzeGuildLevel,
+        GUILD_LEVELS_PER_MEMBER_SLOT,
         recordLeaderboardObservation,
         resolveGuildWeekStart,
         resolveTrialSchedule,
@@ -1498,7 +1585,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.14.0";
+    const SCRIPT_VERSION = "0.15.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -1515,6 +1602,7 @@ function startGuildMonitor(Core) {
         guildBuildingDetails: {},
         guildShrineDetails: {},
         leaderboardTypeDetails: {},
+        levelExperienceTable: [],
         skillDetails: {},
         itemDetails: {},
         guildBuffDetails: {},
@@ -1611,6 +1699,7 @@ function startGuildMonitor(Core) {
             ["guildBuildingDetails", definitions.guildBuildingDetails],
             ["guildShrineDetails", definitions.guildShrineDetails],
             ["leaderboardTypeDetails", definitions.leaderboardTypeDetails],
+            ["levelExperienceTable", definitions.levelExperienceTable],
         ]) {
             if (Object.keys(value).length && (!onlyMissing || !Object.keys(state[key]).length)) state[key] = value;
         }
@@ -1618,7 +1707,7 @@ function startGuildMonitor(Core) {
     }
 
     function hydrateEconomyDefinitions() {
-        if ([state.itemDetails, state.guildBuffDetails, state.guildBuildingDetails, state.guildShrineDetails, state.leaderboardTypeDetails].every((value) => Object.keys(value).length)) return;
+        if ([state.itemDetails, state.guildBuffDetails, state.guildBuildingDetails, state.guildShrineDetails, state.leaderboardTypeDetails, state.levelExperienceTable].every((value) => Object.keys(value).length)) return;
         try {
             const cached = pageWindow.localStorageUtil && pageWindow.localStorageUtil.getInitClientData?.();
             if (cached) applyEconomyDefinitions(cached, true);
@@ -1688,6 +1777,7 @@ function startGuildMonitor(Core) {
             trialHistory: previous.trialHistory || {},
             trialPlans: previous.trialPlans || {},
             guildPointsHistory: Array.isArray(previous.guildPointsHistory) ? previous.guildPointsHistory : [],
+            guildExperienceHistory: Array.isArray(previous.guildExperienceHistory) ? previous.guildExperienceHistory : [],
             leaderboards: previous.leaderboards || {},
         };
         state.guildStore = store.guilds[key];
@@ -1724,8 +1814,11 @@ function startGuildMonitor(Core) {
         const { store, key } = ensureGuildStore();
         const previous = store.guilds[key].guildPointsHistory;
         const next = Core.recordGuildPointsHistory(previous, state.guild, observedAt);
-        if (next === previous) return;
+        const previousExperience = store.guilds[key].guildExperienceHistory;
+        const nextExperience = Core.recordGuildExperienceHistory(previousExperience, state.guild, observedAt);
+        if (next === previous && nextExperience === previousExperience) return;
         store.guilds[key].guildPointsHistory = next;
+        store.guilds[key].guildExperienceHistory = nextExperience;
         writeStore(store);
         state.guildStore = store.guilds[key];
     }
@@ -2486,6 +2579,43 @@ function startGuildMonitor(Core) {
         return `<span class="mwigm-chip ${className}" title="${escapeHtml(title)}">${rank} ${escapeHtml(choice.trialName)}</span>`;
     }
 
+    function renderGuildLevel() {
+        const history = state.guildStore ? state.guildStore.guildExperienceHistory : [];
+        const rate = Core.estimateGuildExperienceRate(history);
+        const info = Core.analyzeGuildLevel(state.guild, state.levelExperienceTable, rate);
+        const hasTable = Array.isArray(state.levelExperienceTable) && state.levelExperienceTable.length > 0;
+        const eta = (hours) => hours === null ? (info.perHour === 0 ? "No exp gained" : "--") : hours === 0 ? "Reached" : formatHours(hours);
+        const levelValue = info.level === null ? "--" : `${info.level}${info.progress === null ? "" : ` · ${formatPercent(info.progress)}`}`;
+        const slotValue = info.nextSlotLevel === null ? "--" : info.expToNextSlot === null ? `Lv ${info.nextSlotLevel}` : `Lv ${info.nextSlotLevel} · ${eta(info.hoursToNextSlot)}`;
+        const rateValue = info.perHour === null ? "Measuring" : formatNumber(info.perHour);
+        const details = [];
+        const slotIsNext = info.nextSlotLevel === info.nextLevel;
+        if (info.expToNextLevel !== null) details.push(`${formatExactNumber(info.expToNextLevel)} exp to level ${info.nextLevel}${info.hoursToNextLevel ? ` (about ${formatHours(info.hoursToNextLevel)})` : ""}${slotIsNext ? `, which adds a member slot (one every ${Core.GUILD_LEVELS_PER_MEMBER_SLOT} levels)` : ""}.`);
+        if (info.expToNextSlot !== null && !slotIsNext) details.push(`${formatExactNumber(info.expToNextSlot)} exp to level ${info.nextSlotLevel}, which adds a member slot (one every ${Core.GUILD_LEVELS_PER_MEMBER_SLOT} levels).`);
+        if (rate) details.push(`Exp/hour is measured over the last ${formatHours(rate.spanMs / 3_600_000)} of guild updates seen by the monitor.`);
+        else details.push("Exp/hour needs at least 15 minutes of guild updates. Keep the game open; the rate uses up to the last 24 hours.");
+        if (!hasTable) details.push("Level thresholds need the game's client definitions. Reload the game after enabling the script.");
+        return `<div class="mwigm-section-title">Guild level <span>From the game's guild data</span></div>
+            <div class="mwigm-status mwigm-guild-level">
+                ${metric("Guild level", levelValue)}
+                ${metric("Guild exp", info.experience === null ? "--" : formatExactNumber(info.experience))}
+                ${metric("Exp / hour", rateValue)}
+                ${metric("Next member slot", slotValue)}
+            </div>
+            <div class="mwigm-notice mwigm-notice-info mwigm-guild-level-notes">${details.map(escapeHtml).join(" ")}</div>`;
+    }
+
+    function formatHours(hours) {
+        if (!Number.isFinite(hours) || hours < 0) return "--";
+        const totalMinutes = Math.round(hours * 60);
+        const days = Math.floor(totalMinutes / 1440);
+        const remainingHours = Math.floor((totalMinutes % 1440) / 60);
+        const minutes = totalMinutes % 60;
+        if (days) return `${days}d ${remainingHours}h`;
+        if (remainingHours) return `${remainingHours}h ${minutes}m`;
+        return `${Math.max(1, minutes)}m`;
+    }
+
     function renderGuild() {
         const structures = Core.analyzeGuildStructures(state.guild, state.guildBuildingLevels, state.guildBuildingDetails, state.guildShrineDetails);
         const leaderboards = Core.getGuildLeaderboardSpots(state.guildStore ? state.guildStore.leaderboards : {});
@@ -2524,6 +2654,7 @@ function startGuildMonitor(Core) {
                 ${metric("This week's trials", weeklyPoints === null ? "--" : formatNumber(weeklyPoints))}
                 ${metric("Observed guild ranks", leaderboards.length)}
             </div>
+            ${renderGuildLevel()}
             <div class="mwigm-section-title">Guild leaderboard <span>Last observed positions</span></div>
             ${rankRows ? `<table class="mwigm-table"><thead><tr><th>Category</th><th>Rank</th><th>Filter</th><th>Seen</th></tr></thead><tbody>${rankRows}</tbody></table>` : `<div class="mwigm-notice mwigm-notice-info">Open a Guilds leaderboard category in the game to capture its rank. The monitor does not request boards automatically.</div>`}
             ${!Object.keys(state.guildBuildingDetails).length && !Object.keys(state.guildShrineDetails).length ? `<div class="mwigm-notice mwigm-notice-info">Building costs need the game's client definitions. Reload after enabling the script or open the Guild panel.</div>` : ""}

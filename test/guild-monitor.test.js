@@ -1129,7 +1129,8 @@ test("reads the trial start hour from the guild or update message and rejects ba
 test("builds the guild recruitment message with the guild chat link", () => {
     const message = Core.buildRecruitMessage();
     assert.equal(Core.GUILD_CHAT_LINK, "[g@]");
-    assert.ok(message.includes(Core.GUILD_CHAT_LINK));
+    assert.ok(message.startsWith(`${Core.GUILD_CHAT_LINK} `), "leads with the guild tag");
+    assert.equal(message.split(Core.GUILD_CHAT_LINK).length - 1, 1);
     assert.match(message, /looking for YOU/);
     assert.match(message, /top 30 guild in Guild Points/);
     assert.match(message, /relaxed requirements/);
@@ -1137,4 +1138,51 @@ test("builds the guild recruitment message with the guild chat link", () => {
     assert.ok(message.endsWith("Hope you apply! :)"));
     assert.ok(!/[\r\n]/.test(message));
     assert.ok(message.length <= 240, `length ${message.length}`);
+});
+
+test("records guild exp samples and measures exp per hour", () => {
+    const hour = 3_600_000;
+    let history = Core.recordGuildExperienceHistory([], { level: 10, experience: 1000, updatedAt: new Date(0).toISOString() }, 999);
+    assert.deepEqual(history, [{ level: 10, experience: 1000, observedAt: 0 }]);
+    const same = Core.recordGuildExperienceHistory(history, { level: 10, experience: 1000, updatedAt: new Date(0).toISOString() }, 5);
+    assert.equal(same, history, "an unchanged guild leaves the stored array untouched");
+    assert.equal(Core.recordGuildExperienceHistory(history, { level: 10 }, 5), history);
+    assert.equal(Core.estimateGuildExperienceRate(history), null);
+    history = Core.recordGuildExperienceHistory(history, { level: 10, experience: 1100, updatedAt: new Date(hour / 2).toISOString() }, 1);
+    history = Core.recordGuildExperienceHistory(history, { level: 10, experience: 1150, updatedAt: new Date(hour / 2 + 60_000).toISOString() }, 1);
+    history = Core.recordGuildExperienceHistory(history, { level: 10, experience: 1160, updatedAt: new Date(hour / 2 + 120_000).toISOString() }, 1);
+    assert.equal(history.length, 3, "a sample under 5 minutes after the one before it is replaced");
+    assert.equal(history[2].experience, 1160);
+    history = Core.recordGuildExperienceHistory(history, { level: 11, experience: 3000, updatedAt: new Date(2 * hour).toISOString() }, 1);
+    const rate = Core.estimateGuildExperienceRate(history);
+    assert.equal(rate.perHour, 1000);
+    assert.equal(rate.spanMs, 2 * hour);
+    const late = Core.recordGuildExperienceHistory(history, { level: 11, experience: 9000, updatedAt: new Date(30 * hour).toISOString() }, 1);
+    assert.equal(Core.estimateGuildExperienceRate(late), null, "older samples outside the 24-hour window are ignored");
+    const backwards = Core.recordGuildExperienceHistory(history, { level: 11, experience: 3500, updatedAt: new Date(hour).toISOString() }, 1);
+    assert.equal(backwards, history, "older updates are ignored");
+});
+
+test("analyzes guild level progress and the next member slot", () => {
+    const table = [0, 0, 100, 300, 600, 1000, 1500, 2100];
+    const info = Core.analyzeGuildLevel({ level: 4, experience: 800 }, table, { perHour: 100 });
+    assert.equal(Core.GUILD_LEVELS_PER_MEMBER_SLOT, 3);
+    assert.equal(info.level, 4);
+    assert.equal(info.progress, 0.5);
+    assert.equal(info.nextLevel, 5);
+    assert.equal(info.expToNextLevel, 200);
+    assert.equal(info.hoursToNextLevel, 2);
+    assert.equal(info.nextSlotLevel, 6);
+    assert.equal(info.expToNextSlot, 700);
+    assert.equal(info.hoursToNextSlot, 7);
+    assert.equal(Core.analyzeGuildLevel({ level: 3, experience: 300 }, table).nextSlotLevel, 6, "a slot level already reached points at the next one");
+    assert.equal(Core.analyzeGuildLevel({ level: 5, experience: 1200 }, table).nextSlotLevel, 6);
+    const unknownRate = Core.analyzeGuildLevel({ level: 4, experience: 800 }, table, null);
+    assert.equal(unknownRate.perHour, null);
+    assert.equal(unknownRate.hoursToNextSlot, null);
+    const noTable = Core.analyzeGuildLevel({ level: 4, experience: 800 }, []);
+    assert.equal(noTable.expToNextSlot, null);
+    assert.equal(noTable.progress, null);
+    assert.equal(Core.analyzeGuildLevel(null, table).level, null);
+    assert.deepEqual(Core.extractEconomyDefinitions({ initClientData: { levelExperienceTable: table } }).levelExperienceTable, table);
 });

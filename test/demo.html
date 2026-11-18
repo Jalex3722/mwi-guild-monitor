@@ -112,6 +112,7 @@
             }));
             send({
                 type: "init_client_data",
+                levelExperienceTable: Array.from({ length: 41 }, (_, level) => level < 2 ? 0 : Math.round(2500 * (level - 1) ** 2.4)),
                 skillDetailMap: {
                     "/skills/total_level": { name: "Total Level" },
                     "/skills/cooking": { name: "Cooking" },
@@ -157,7 +158,7 @@
             });
             send({
                 type: "init_character_data",
-                guild: { id: 44, name: "The Milky Scholars", currentWeekStartAt, trialScheduleHourOffset, trialMinLevelsData: "{\"/guild_skilling/cooking\":180,\"/guild_skilling/mining\":200}" },
+                guild: { id: 44, name: "The Milky Scholars", level: 20, experience: 2_950_000, updatedAt: new Date(Date.now() - 2 * 3_600_000).toISOString(), currentWeekStartAt, trialScheduleHourOffset, trialMinLevelsData: "{\"/guild_skilling/cooking\":180,\"/guild_skilling/mining\":200}" },
                 guildCharacterMap,
                 guildSharableCharacterMap,
                 guildWeeklyTrialSet: { skillHrids: ["/guild_skilling/cooking", "/guild_skilling/mining"], combatHrids: ["/guild_combat/badger", "/guild_combat/swarm"] },
@@ -172,6 +173,7 @@
             });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 2, name: "Babbage" }, characterSkills: skills(2, 1691, 129, 151) } });
             send({ type: "profile_shared", profile: { sharableCharacter: { id: 3, name: "Curie" }, characterSkills: skills(3, 1744, 99, 138) } });
+            send({ type: "guild_updated", guild: { id: 44, name: "The Milky Scholars", level: 20, experience: 3_010_000, updatedAt: new Date().toISOString(), currentWeekStartAt, trialScheduleHourOffset, trialMinLevelsData: "{\"/guild_skilling/cooking\":180,\"/guild_skilling/mining\":200}" } });
             setTimeout(() => document.getElementById("mwi-guild-monitor-button").click(), 50);
         });
     </script>
