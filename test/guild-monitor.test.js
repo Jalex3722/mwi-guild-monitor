@@ -1186,3 +1186,13 @@ test("analyzes guild level progress and the next member slot", () => {
     assert.equal(Core.analyzeGuildLevel(null, table).level, null);
     assert.deepEqual(Core.extractEconomyDefinitions({ initClientData: { levelExperienceTable: table } }).levelExperienceTable, table);
 });
+
+test("treats the game's leftover whisper prefix as an empty chat draft", () => {
+    for (const draft of ["", "/w Ada", "/w Ada ", "/W Babbage  ", "/whisper Curie "]) {
+        assert.equal(Core.isReplaceableChatDraft(draft), true, JSON.stringify(draft));
+    }
+    for (const draft of [" ", "/w Ada hi", "/w Ada  see you at trials", "/w ", "/profile Ada", "hello", "/w Ada\nhi"]) {
+        assert.equal(Core.isReplaceableChatDraft(draft), false, JSON.stringify(draft));
+    }
+    assert.equal(Core.isReplaceableChatDraft(null), true);
+});

@@ -46,7 +46,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.15.0`.
+The monitor header displays its running version. The current release is `v0.15.1`.
 
 ## Collecting member skill data
 
@@ -65,7 +65,7 @@ The **Recruit message** button at the top of the monitor fills the game's *empty
 
 Switch the chat to the Recruit channel, review or edit the draft, and press Enter yourself. It never sends the message or overwrites an existing draft. The message text is fixed in the script (`RECRUIT_MESSAGE`); update it there if your guild's ranking or rules change.
 
-In **Trials**, each member in the **No skilling or combat signup** notice has a **Remind** button. It fills the same *empty* chat draft with a whisper (`/w CharacterName …`) politely reminding them to sign up for this week's trials. Review it and press Enter yourself to send; the script never sends the whisper or overwrites an existing draft.
+In **Trials**, each member in the **No skilling or combat signup** notice has a **Remind** button. It fills the same *empty* chat draft with a whisper (`/w CharacterName …`) politely reminding them to sign up for this week's trials. Review it and press Enter yourself to send; the script never sends the whisper or overwrites an existing draft. After you send a whisper, the game leaves `/w CharacterName` in the chat box for a quick follow-up; the chat buttons treat that leftover prefix (with nothing typed after the name) as empty and replace it, so you can remind members one after another. Any text after the name counts as a real draft and is left alone.
 
 The no-signup notice and its Remind buttons appear only in the 24 hours before the guild's scheduled trial start (or from the guild week reset, if that is later) and hide once trials begin. Until then, the Trials tab shows the start time and when reminders open. The start is read from the game's `trialScheduleHourOffset`: whole hours after the guild week begins (Friday 00:00 UTC). If the game has not sent it yet, the notice behaves as before and a note asks you to open Guild in the game.
 

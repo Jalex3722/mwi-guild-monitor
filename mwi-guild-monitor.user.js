@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.15.0
+// @version      0.15.1
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1511,6 +1511,13 @@
 
     const TRIAL_REMINDER_MESSAGE = "Hi! Friendly reminder to sign up for this week's guild trials (skilling or combat) when you get a chance. Thank you!";
 
+    // After a whisper is sent, the game leaves "/w Name " in the chat box for a quick follow-up.
+    // That leftover prefix (no message after the name) is safe to replace; anything else is a real draft.
+    function isReplaceableChatDraft(draft) {
+        const text = typeof draft === "string" ? draft : "";
+        return text === "" || /^\/(?:w|whisper)[ \t]+\S+[ \t]*$/i.test(text);
+    }
+
     function buildTrialReminderWhisper(name) {
         const trimmed = typeof name === "string" ? name.trim() : "";
         if (!trimmed || /\s/.test(trimmed)) return null;
@@ -1522,6 +1529,7 @@
         buildRecruitMessage,
         TRIAL_REMINDER_MESSAGE,
         buildTrialReminderWhisper,
+        isReplaceableChatDraft,
         AURA_DEFINITIONS,
         UTILITY_DEFINITIONS,
         DAY_MS,
@@ -1585,7 +1593,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.15.0";
+    const SCRIPT_VERSION = "0.15.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -3099,12 +3107,13 @@ function startGuildMonitor(Core) {
         findGameChatInput()?.focus();
     }
 
-    // Puts `text` into the visible, empty game chat box without sending it. Returns an error message or "".
+    // Puts `text` into the visible game chat box without sending it, if the box is empty or holds only the
+    // game's leftover "/w Name" whisper prefix. Returns an error message or "".
     function fillGameChatDraft(text, buttonLabel) {
         const input = findGameChatInput();
         if (!input) return `Could not find one visible game chat box. Open chat, then try ${buttonLabel} again.`;
         const draft = input.isContentEditable ? input.textContent : input.value;
-        if (draft) return `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
+        if (!Core.isReplaceableChatDraft(draft)) return `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
         if (input.isContentEditable) {
             input.textContent = text;
         } else {
