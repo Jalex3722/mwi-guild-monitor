@@ -1190,3 +1190,12 @@ test("skilling plan solves a full-size guild quickly", () => {
     assert.equal(analysis.recommendations.length, 60);
     assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
 });
+
+test("only the Remind button may replace the leftover whisper prefix", () => {
+    const source = require("node:fs").readFileSync(require.resolve("../mwi-guild-monitor.user.js"), "utf8");
+    assert.match(source, /prepareChatDraft\(memberId, "Remind", "whisper", Core\.buildTrialReminderWhisper, \{ replaceWhisperPrefix: true \}\);/);
+    assert.match(source, /prepareChatDraft\(memberId, "Get profile", "profile chat command",\s*\(name\) => [^;]*\);/);
+    assert.doesNotMatch(source.match(/prepareChatDraft\(memberId, "Get profile"[^;]*;/)[0], /replaceWhisperPrefix/);
+    assert.match(source, /fillGameChatDraft\(Core\.buildRecruitMessage\(\), "Recruit message"\)/);
+    assert.match(source, /if \(draft && !\(replaceWhisperPrefix && Core\.isReplaceableChatDraft\(draft\)\)\) return/);
+});

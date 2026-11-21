@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.16.0
+// @version      0.16.1
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1584,7 +1584,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.16.0";
+    const SCRIPT_VERSION = "0.16.1";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -3138,14 +3138,15 @@ function startGuildMonitor(Core) {
     }
 
     function prepareTrialReminderDraft(memberId) {
-        prepareChatDraft(memberId, "Remind", "whisper", Core.buildTrialReminderWhisper);
+        // Only Remind may replace the game's leftover "/w Name" prefix, so reminders can go out back to back.
+        prepareChatDraft(memberId, "Remind", "whisper", Core.buildTrialReminderWhisper, { replaceWhisperPrefix: true });
     }
 
-    function prepareChatDraft(memberId, buttonLabel, commandLabel, buildCommand) {
+    function prepareChatDraft(memberId, buttonLabel, commandLabel, buildCommand, options = {}) {
         const member = currentAggregate().members.find((entry) => String(entry.id) === String(memberId));
         if (!member) return;
         const command = buildCommand(member.name);
-        const error = command ? fillGameChatDraft(command, buttonLabel) : `This member's name cannot be used in a ${commandLabel}.`;
+        const error = command ? fillGameChatDraft(command, buttonLabel, options) : `This member's name cannot be used in a ${commandLabel}.`;
         if (error) {
             state.profileDraftNotice = error;
             render();
@@ -3156,13 +3157,14 @@ function startGuildMonitor(Core) {
         findGameChatInput()?.focus();
     }
 
-    // Puts `text` into the visible game chat box without sending it, if the box is empty or holds only the
-    // game's leftover "/w Name" whisper prefix. Returns an error message or "".
-    function fillGameChatDraft(text, buttonLabel) {
+    // Puts `text` into the visible game chat box without sending it, if the box is empty. With
+    // replaceWhisperPrefix (Remind only), the game's leftover "/w Name" prefix also counts as empty.
+    // Returns an error message or "".
+    function fillGameChatDraft(text, buttonLabel, { replaceWhisperPrefix = false } = {}) {
         const input = findGameChatInput();
         if (!input) return `Could not find one visible game chat box. Open chat, then try ${buttonLabel} again.`;
         const draft = input.isContentEditable ? input.textContent : input.value;
-        if (!Core.isReplaceableChatDraft(draft)) return `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
+        if (draft && !(replaceWhisperPrefix && Core.isReplaceableChatDraft(draft))) return `Chat already has a draft. Send or clear it first; ${buttonLabel} will not overwrite it.`;
         if (input.isContentEditable) {
             input.textContent = text;
         } else {
