@@ -425,42 +425,6 @@ test("tracks high-level thresholds alongside trial signup status", () => {
     assert.equal(analysis.optimalDistribution[0].assignments.length, 4);
 });
 
-test("balances skilling recommendations across trials", () => {
-    const recommendationRoster = [
-        { id: "1", name: "Ada", role: "leader", signedUpSkillingTrialHrid: "cook" },
-        { id: "2", name: "Babbage", role: "officer", signedUpSkillingTrialHrid: "cook" },
-        { id: "3", name: "Curie", role: "member", signedUpSkillingTrialHrid: "mine" },
-        { id: "4", name: "Noether", role: "member", signedUpSkillingTrialHrid: "", signedUpCombatTrialHrid: "badger" },
-    ];
-    const recommendationProfiles = {
-        1: { id: "1", name: "Ada", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 100 }, { skillHrid: "/skills/mining", level: 70 }] },
-        2: { id: "2", name: "Babbage", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 90 }, { skillHrid: "/skills/mining", level: 95 }] },
-        3: { id: "3", name: "Curie", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 80 }, { skillHrid: "/skills/mining", level: 100 }] },
-        4: { id: "4", name: "Noether", capturedAt: 1, skills: [{ skillHrid: "/skills/cooking", level: 96 }, { skillHrid: "/skills/mining", level: 91 }] },
-    };
-    const aggregate = Core.aggregateGuild(recommendationRoster, recommendationProfiles);
-    const analysis = Core.analyzeTrials({
-        aggregate,
-        weeklyTrialSet: { skillHrids: ["cook", "mine"], combatHrids: [] },
-        trialDetails: {
-            cook: { skillHrid: "/skills/cooking" },
-            mine: { skillHrid: "/skills/mining" },
-        },
-        trialMinLevels: JSON.stringify({ cook: 90, mine: 90 }),
-    });
-    const babbage = analysis.recommendations.find((entry) => entry.memberName === "Babbage");
-    const cookingDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "cook");
-    const miningDistribution = analysis.optimalDistribution.find((entry) => entry.trialHrid === "mine");
-
-    assert.equal(analysis.recommendations.length, 4);
-    assert.ok(babbage.recommendedLevel >= 90);
-    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Noether").signupStatus, "combatOnly");
-    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Ada").signupStatus, "aligned");
-    assert.equal(cookingDistribution.assignments.length, 2);
-    assert.equal(miningDistribution.assignments.length, 2);
-    assert.ok(analysis.recommendations.every((entry) => entry.recommendedLevel >= 90));
-});
-
 test("recommends all eligible members and leaves missing profiles unknown", () => {
     const aggregate = Core.aggregateGuild([
         { id: "1", name: "Ada", signedUpSkillingTrialHrid: "cook" },
@@ -487,7 +451,6 @@ test("recommends all eligible members and leaves missing profiles unknown", () =
     assert.deepEqual(analysis.missingRecommendedSignup.map((entry) => entry.memberName), ["Unsigned"]);
     assert.ok(analysis.wrongRecommendedSignup.every((entry) => entry.currentTrialHrid && entry.currentTrialHrid !== entry.recommendedTrialHrid));
     assert.equal(analysis.optimalDistribution.reduce((sum, trial) => sum + trial.unknownActualCount, 0), 2);
-    assert.equal(analysis.allocationBalanced, true);
 });
 
 test("treats the game trial level as information, not a signup requirement", () => {
@@ -506,109 +469,6 @@ test("treats the game trial level as information, not a signup requirement", () 
     });
     assert.deepEqual(analysis.skilling.map((trial) => trial.reportedLevel), [180, 250]);
     assert.equal(analysis.recommendations.length, 2, "nobody is excluded by the reported trial level");
-    assert.equal(analysis.allocationBalanced, true);
-});
-
-test("globally maximizes the combined average of four balanced skilling trials", () => {
-    const trialHrids = ["cook", "mine", "brew", "wood"];
-    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing", "/skills/woodcutting"];
-    const trialDetails = Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }]));
-    const roster = Array.from({ length: 6 }, (_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % trialHrids.length] }));
-    let seed = 197;
-    const random = () => ((seed = (seed * 48271) % 2147483647) % 66) + 85;
-
-    for (let fixture = 0; fixture < 12; fixture += 1) {
-        const profiles = Object.fromEntries(roster.map((member) => [member.id, {
-            id: member.id,
-            name: member.name,
-            capturedAt: 1,
-            skills: skillHrids.map((skillHrid) => ({ skillHrid, level: random() })),
-        }]));
-        const aggregate = Core.aggregateGuild(roster, profiles);
-        const analysis = Core.analyzeTrials({
-            aggregate,
-            weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
-            trialDetails,
-        });
-        const levels = roster.map((member) => skillHrids.map((hrid) => profiles[member.id].skills.find((skill) => skill.skillHrid === hrid).level));
-        const score = (choices) => {
-            const counts = trialHrids.map((_, trial) => choices.filter((choice) => choice === trial).length);
-            if (counts.some((count) => !count) || Math.max(...counts) - Math.min(...counts) > 1) return -Infinity;
-            return trialHrids.reduce((sum, _, trial) => sum + choices.reduce((total, choice, member) =>
-                total + (choice === trial ? levels[member][trial] : 0), 0) / counts[trial], 0);
-        };
-        let maximum = -Infinity;
-        for (let encoded = 0; encoded < trialHrids.length ** roster.length; encoded += 1) {
-            let remaining = encoded;
-            const choices = roster.map(() => {
-                const choice = remaining % trialHrids.length;
-                remaining = Math.floor(remaining / trialHrids.length);
-                return choice;
-            });
-            maximum = Math.max(maximum, score(choices));
-        }
-        const recommended = roster.map((member) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === member.id).recommendedTrialHrid));
-        assert.ok(Math.abs(score(recommended) - maximum) < 1e-8, `fixture ${fixture}`);
-        assert.ok(Math.abs(analysis.combinedTargetAverage - maximum) < 1e-8, `combined average ${fixture}`);
-        assert.equal(analysis.targetCoveredTrialCount, 4);
-        assert.equal(analysis.allocationBalanced, true);
-    }
-});
-
-test("equal-level recommendations do not copy current signups", () => {
-    const trials = ["cook", "mine", "brew", "wood"];
-    const skills = ["/skills/cooking", "/skills/mining", "/skills/brewing", "/skills/woodcutting"];
-    const profiles = Object.fromEntries(trials.map((_, index) => [String(index + 1), {
-        id: String(index + 1), name: `Member ${index + 1}`, capturedAt: 1,
-        skills: skills.map((skillHrid) => ({ skillHrid, level: 100 })),
-    }]));
-    const analyze = (signupForMember) => Core.analyzeTrials({
-        aggregate: Core.aggregateGuild(trials.map((_, index) => ({
-            id: String(index + 1), name: `Member ${index + 1}`,
-            signedUpSkillingTrialHrid: signupForMember(index),
-        })), profiles),
-        weeklyTrialSet: { skillHrids: trials, combatHrids: [] },
-        trialDetails: Object.fromEntries(trials.map((hrid, index) => [hrid, { skillHrid: skills[index] }])),
-    });
-    const unsigned = analyze(() => "");
-    const positions = (analysis) => Object.fromEntries(analysis.recommendations.map((entry) => [entry.memberId, entry.recommendedTrialHrid]));
-    const targetByMember = positions(unsigned);
-    const signed = analyze((index) => trials[(trials.indexOf(targetByMember[String(index + 1)]) + 1) % trials.length]);
-
-    assert.deepEqual(positions(signed), positions(unsigned));
-    assert.equal(signed.combinedTargetAverage, 400);
-    assert.equal(unsigned.missingRecommendedSignup.length, 4);
-    assert.equal(signed.wrongRecommendedSignup.length, 4);
-});
-
-test("global trial assignment keeps specialists in their best trial", () => {
-    const trialHrids = ["cook", "mine", "brew"];
-    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing"];
-    const levels = [
-        [140, 90, 90],
-        [90, 140, 90],
-        [90, 90, 140],
-        [130, 120, 110],
-        [110, 130, 120],
-    ];
-    const roster = levels.map((_, index) => ({ id: String(index + 1), name: `Member ${index + 1}`, signedUpSkillingTrialHrid: trialHrids[index % 3] }));
-    const profiles = Object.fromEntries(roster.map((member, index) => [member.id, {
-        id: member.id, name: member.name, capturedAt: 1,
-        skills: skillHrids.map((skillHrid, skill) => ({ skillHrid, level: levels[index][skill] })),
-    }]));
-    const aggregate = Core.aggregateGuild(roster, profiles);
-    const analysis = Core.analyzeTrials({
-        aggregate,
-        weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
-        trialDetails: Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }])),
-        trialMinLevels: { cook: 100, mine: 100, brew: 100 },
-    });
-    const choices = roster.map((member) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === member.id).recommendedTrialHrid));
-
-    assert.equal(analysis.allocationBalanced, true);
-    assert.deepEqual(choices.slice(0, 3), [0, 1, 2]);
-    choices.forEach((choice, member) => assert.ok(levels[member][choice] >= 100));
-    assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.assignments.length).sort(), [1, 2, 2]);
 });
 
 test("tracks exact-one aura coverage for each combat trial", () => {
@@ -1195,4 +1055,138 @@ test("treats the game's leftover whisper prefix as an empty chat draft", () => {
         assert.equal(Core.isReplaceableChatDraft(draft), false, JSON.stringify(draft));
     }
     assert.equal(Core.isReplaceableChatDraft(null), true);
+});
+
+// Builds a guild with captured profiles plus optional "ghost" members (no profile) signed up for a
+// trial. Ghosts keep their slots, which shrinks the plan's capacity: each skilling trial has 20 slots
+// at skilling encampment level 0.
+function planFixture(levels, { trialHrids = ["cook", "mine", "brew", "wood"], signups = [], combat = [], ghosts = {} } = {}) {
+    const skillHrids = ["/skills/cooking", "/skills/mining", "/skills/brewing", "/skills/woodcutting"].slice(0, trialHrids.length);
+    const roster = levels.map((_, index) => ({
+        id: String(index + 1),
+        name: `Member ${index + 1}`,
+        signedUpSkillingTrialHrid: signups[index] || "",
+        signedUpCombatTrialHrid: combat[index] || "",
+    }));
+    Object.entries(ghosts).forEach(([trialHrid, count]) => {
+        for (let index = 0; index < count; index += 1) {
+            roster.push({ id: `ghost-${trialHrid}-${index}`, name: `Ghost ${trialHrid} ${index}`, signedUpSkillingTrialHrid: trialHrid });
+        }
+    });
+    const profiles = Object.fromEntries(levels.map((row, index) => [String(index + 1), {
+        id: String(index + 1), name: `Member ${index + 1}`, capturedAt: 1,
+        skills: skillHrids.map((skillHrid, skill) => ({ skillHrid, level: row[skill] })),
+    }]));
+    const analysis = Core.analyzeTrials({
+        aggregate: Core.aggregateGuild(roster, profiles),
+        weeklyTrialSet: { skillHrids: trialHrids, combatHrids: [] },
+        trialDetails: Object.fromEntries(trialHrids.map((hrid, index) => [hrid, { skillHrid: skillHrids[index] }])),
+    });
+    const choiceOf = (index) => trialHrids.indexOf(analysis.recommendations.find((entry) => entry.memberId === String(index + 1)).recommendedTrialHrid);
+    return { analysis, choices: levels.map((_, index) => choiceOf(index)) };
+}
+
+test("Hungarian solver finds the minimum-cost assignment on rectangular matrices", () => {
+    assert.deepEqual(Core.solveAssignment([]), []);
+    assert.deepEqual(Core.solveAssignment([[4, 1, 3], [2, 0, 5], [3, 2, 2]]), [1, 0, 2]);
+    let seed = 7;
+    const random = () => (seed = (seed * 48271) % 2147483647) % 50;
+    for (let fixture = 0; fixture < 40; fixture += 1) {
+        const rows = 1 + (fixture % 4);
+        const columns = rows + (fixture % 3);
+        const costs = Array.from({ length: rows }, () => Array.from({ length: columns }, random));
+        const chosen = Core.solveAssignment(costs);
+        assert.equal(new Set(chosen).size, rows, "each column used once");
+        const total = chosen.reduce((sum, column, row) => sum + costs[row][column], 0);
+        let best = Infinity;
+        const search = (row, used, sum) => {
+            if (row === rows) { best = Math.min(best, sum); return; }
+            for (let column = 0; column < columns; column += 1) {
+                if (!used.has(column)) { used.add(column); search(row + 1, used, sum + costs[row][column]); used.delete(column); }
+            }
+        };
+        search(0, new Set(), 0);
+        assert.equal(total, best, `fixture ${fixture}`);
+    }
+});
+
+test("skilling plan puts each member in their highest skill when slots are plentiful", () => {
+    const { analysis, choices } = planFixture([
+        [150, 90, 90, 90],
+        [140, 100, 90, 90],
+        [130, 120, 90, 90],
+        [90, 90, 90, 160],
+    ]);
+    assert.deepEqual(choices, [0, 0, 0, 3], "no forced balancing: members strongest in Cooking all go to Cooking");
+    assert.equal(analysis.plannedTotalLevel, 150 + 140 + 130 + 160);
+    assert.equal(analysis.optimalDistribution.find((trial) => trial.trialHrid === "cook").targetTotalLevel, 420);
+    assert.deepEqual(analysis.noSlotRecommendations, []);
+});
+
+test("skilling plan maximizes the total level under slot caps (brute force check)", () => {
+    const trialHrids = ["cook", "mine", "brew"];
+    let seed = 311;
+    const random = () => ((seed = (seed * 48271) % 2147483647) % 80) + 60;
+    for (let fixture = 0; fixture < 12; fixture += 1) {
+        const levels = Array.from({ length: 6 }, () => trialHrids.map(random));
+        // 18 ghosts in Cooking and 19 in Mining leave 2 and 1 open slots; Brewing keeps 20.
+        const caps = [2, 1, 20];
+        const { analysis, choices } = planFixture(levels, { trialHrids, ghosts: { cook: 18, mine: 19 } });
+        assert.deepEqual(analysis.optimalDistribution.map((trial) => trial.planCapacity), caps);
+        trialHrids.forEach((_, trial) => assert.ok(choices.filter((choice) => choice === trial).length <= caps[trial]));
+        let best = -Infinity;
+        for (let encoded = 0; encoded < 3 ** levels.length; encoded += 1) {
+            let remaining = encoded;
+            const option = levels.map(() => { const choice = remaining % 3; remaining = Math.floor(remaining / 3); return choice; });
+            if (trialHrids.some((_, trial) => option.filter((choice) => choice === trial).length > caps[trial])) continue;
+            best = Math.max(best, option.reduce((sum, choice, member) => sum + levels[member][choice], 0));
+        }
+        const total = choices.reduce((sum, choice, member) => sum + levels[member][choice], 0);
+        assert.equal(total, best, `fixture ${fixture}`);
+        assert.equal(analysis.plannedTotalLevel, best);
+    }
+});
+
+test("skilling plan reports members who cannot get any open slot", () => {
+    // One open Cooking slot and nothing else this week: the higher level member gets it.
+    const { analysis } = planFixture([[120], [150]], { trialHrids: ["cook"], ghosts: { cook: 19 } });
+    const byName = Object.fromEntries(analysis.recommendations.map((entry) => [entry.memberName, entry]));
+    assert.equal(byName["Member 2"].recommendedTrialName, "Cooking");
+    assert.equal(byName["Member 1"].signupStatus, "noSlot");
+    assert.equal(byName["Member 1"].recommendedTrialHrid, "");
+    assert.deepEqual(analysis.noSlotRecommendations.map((entry) => entry.memberName), ["Member 1"]);
+    assert.equal(analysis.plannedTotalLevel, 150);
+});
+
+test("skilling plan flags right spot, wrong trial, combat only and not signed up", () => {
+    const { analysis } = planFixture([
+        [150, 90, 90, 90],
+        [90, 150, 90, 90],
+        [90, 90, 150, 90],
+        [90, 90, 90, 150],
+    ], { signups: ["cook", "cook", "", ""], combat: ["", "", "badger", ""] });
+    const status = Object.fromEntries(analysis.recommendations.map((entry) => [entry.memberName, entry.signupStatus]));
+    assert.deepEqual(status, { "Member 1": "aligned", "Member 2": "different", "Member 3": "combatOnly", "Member 4": "unsigned" });
+    assert.equal(analysis.recommendations.find((entry) => entry.memberName === "Member 2").recommendedTrialName, "Mining");
+    assert.deepEqual(analysis.wrongRecommendedSignup.map((entry) => entry.memberName), ["Member 2"]);
+    assert.deepEqual(analysis.missingRecommendedSignup.map((entry) => entry.memberName).sort(), ["Member 3", "Member 4"]);
+    assert.equal(analysis.currentTotalLevel, 150 + 90);
+    assert.equal(analysis.plannedTotalLevel, 600);
+});
+
+test("skilling plan keeps current signups on exact ties", () => {
+    const levels = [[100, 100, 100, 100], [100, 100, 100, 100], [120, 100, 100, 100]];
+    const { analysis, choices } = planFixture(levels, { signups: ["mine", "wood", "brew"] });
+    assert.deepEqual(choices, [1, 3, 0]);
+    assert.deepEqual(analysis.recommendations.filter((entry) => entry.isAligned).map((entry) => entry.memberName).sort(), ["Member 1", "Member 2"]);
+});
+
+test("skilling plan solves a full-size guild quickly", () => {
+    let seed = 99;
+    const random = () => ((seed = (seed * 48271) % 2147483647) % 120) + 80;
+    const levels = Array.from({ length: 60 }, () => [random(), random(), random(), random()]);
+    const started = Date.now();
+    const { analysis } = planFixture(levels);
+    assert.equal(analysis.recommendations.length, 60);
+    assert.ok(Date.now() - started < 1000, `took ${Date.now() - started}ms`);
 });

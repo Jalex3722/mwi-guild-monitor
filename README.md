@@ -19,6 +19,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 - Locally cached member profiles and capture age
 - Manual snapshots with average-level change comparison
 - Weekly skilling and combat trial signup counts
+- Skilling plan: the signup layout with the highest total level under slot limits, with right-spot, wrong-trial and not-signed-up flags
 - Previous-week signup tracking, with an unsigned status recorded only when neither trial category was joined
 - Per-trial signup levels, level ranges, the game-reported trial level, and member rosters
 - A **Recruit message** button that drafts a recruitment post linking your guild for the Recruit channel
@@ -46,7 +47,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.15.1`.
+The monitor header displays its running version. The current release is `v0.16.0`.
 
 ## Collecting member skill data
 
@@ -108,6 +109,22 @@ The **Results** tab keeps a rolling 12-week local record of trial status, highes
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
 The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
+
+## Skilling plan
+
+The **Skilling plan** tab answers: if every member signs up for exactly one of this week's skilling trials, where should each person go so the guild's total level, summed over all of the trials, is as high as possible? Each trial can only take its open slots (20 plus 2 per Skilling Encampment level). Slots already held by signed-up members without a captured profile stay reserved for them.
+
+This is an assignment problem. The monitor solves it exactly with the Hungarian algorithm, using each member's captured skill levels. A guild-size roster takes a few milliseconds. When slots are plentiful, the answer is simply each member's highest skill among this week's trials. When a trial fills, the members who lose the fewest levels by going elsewhere are the ones moved. On exact ties, a member's current signup is kept.
+
+The tab shows the planned total and the total signed up now for each trial, then every member with a flag:
+
+- **Right spot**: signed up for their planned trial.
+- **Wrong trial**: signed up for a different skilling trial, with the trial to move to.
+- **No skilling signup · combat only**: signed up for combat but not skilling.
+- **Not signed up for any trial**: no skilling or combat signup.
+- **No open slot**: every open slot went to a higher level.
+
+Members not signed up for any trial are also listed at the top, including those without a profile. Members without captured levels are listed separately; open their Profile to include them. The plan is a suggestion only and never changes signups.
 
 ## Guild Points, buildings, and leaderboards
 

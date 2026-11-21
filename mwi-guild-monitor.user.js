@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.15.1
+// @version      0.16.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -1137,7 +1137,13 @@
             const level = getProfileSkillLevel(member, trial.skillHrid);
             return Number.isFinite(level);
         }));
-        const recommendations = buildSkillingRecommendations(eligibleMembers, skilling, aggregate.skills, trialDetails, skillDetails);
+        // Members the plan cannot place (no captured levels) still hold their current slots.
+        const eligibleIds = new Set(eligibleMembers.map((member) => String(member.id)));
+        const planCapacities = new Map(skilling.map((trial) => [
+            trial.trialHrid,
+            Number.isFinite(trial.capacity) ? Math.max(0, trial.capacity - trial.signups.filter((entry) => !eligibleIds.has(String(entry.memberId))).length) : null,
+        ]));
+        const recommendations = buildSkillingRecommendations(eligibleMembers, skilling, aggregate.skills, trialDetails, skillDetails, planCapacities);
         const medianSuggestions = buildMedianTrialSuggestions(currentMembers, skilling, aggregate.skills);
         const recommendationById = new Map(recommendations.map((entry) => [String(entry.memberId), entry]));
         const memberComparisons = currentMembers.map((member) => {
@@ -1161,6 +1167,8 @@
             const assignments = recommendations.filter((entry) => entry.recommendedTrialHrid === trial.trialHrid)
                 .sort((left, right) => left.memberName.localeCompare(right.memberName));
             const actualProfileLevels = trial.signups.map((entry) => getProfileSkillLevel(memberById.get(String(entry.memberId)), trial.skillHrid)).filter(Number.isFinite);
+            const targetTotalLevel = assignments.reduce((sum, entry) => sum + entry.recommendedLevel, 0);
+            const actualTotalLevel = actualProfileLevels.reduce((sum, level) => sum + level, 0);
             const unknownActualCount = trial.signups.filter((entry) => !recommendationById.has(String(entry.memberId))).length;
             return {
                 trialHrid: trial.trialHrid,
@@ -1170,15 +1178,18 @@
                 actualProfileCount: actualProfileLevels.length,
                 actualAverageLevel: actualProfileLevels.length ? actualProfileLevels.reduce((sum, level) => sum + level, 0) / actualProfileLevels.length : null,
                 targetProfileCount: assignments.length,
-                targetAverageLevel: assignments.length ? assignments.reduce((sum, entry) => sum + entry.recommendedLevel, 0) / assignments.length : null,
+                targetAverageLevel: assignments.length ? targetTotalLevel / assignments.length : null,
+                targetTotalLevel,
+                actualTotalLevel,
+                capacity: trial.capacity,
+                planCapacity: planCapacities.get(trial.trialHrid),
                 unknownActualCount,
                 aligned: assignments.filter((entry) => entry.signupStatus === "aligned"),
                 signedElsewhere: assignments.filter((entry) => entry.currentTrialHrid !== trial.trialHrid),
             };
         });
-        const targetCoveredTrialCount = optimalDistribution.filter((trial) => Number.isFinite(trial.targetAverageLevel)).length;
-        const combinedTargetAverage = targetCoveredTrialCount === skilling.length && skilling.length
-            ? optimalDistribution.reduce((sum, trial) => sum + trial.targetAverageLevel, 0) : null;
+        const plannedTotalLevel = optimalDistribution.reduce((sum, trial) => sum + trial.targetTotalLevel, 0);
+        const currentTotalLevel = optimalDistribution.reduce((sum, trial) => sum + trial.actualTotalLevel, 0);
         const auraTracking = currentMembers
             .filter((member) => member.desiredAuraHrid)
             .map((member) => {
@@ -1210,9 +1221,9 @@
             wrongRecommendedSignup: recommendations.filter((entry) => entry.signupStatus === "different"),
             medianSuggestions,
             optimalDistribution,
-            targetCoveredTrialCount,
-            combinedTargetAverage,
-            allocationBalanced: optimalDistribution.length < 2 || Math.max(...optimalDistribution.map((trial) => trial.assignments.length)) - Math.min(...optimalDistribution.map((trial) => trial.assignments.length)) <= 1,
+            plannedTotalLevel,
+            currentTotalLevel,
+            noSlotRecommendations: recommendations.filter((entry) => entry.signupStatus === "noSlot"),
             auraTracking,
             skillingSignedCount: currentMembers.filter((member) => member.currentSkillingTrialHrid).length,
             combatSignedCount: currentMembers.filter((member) => member.currentCombatTrialHrid).length,
@@ -1221,75 +1232,64 @@
         };
     }
 
-    function buildSkillingRecommendations(members, trials, aggregateSkills = [], trialDetails = {}, skillDetails = {}) {
+    // Optimal skilling roster: each member joins at most one of this week's skilling trials, each trial
+    // holds at most its open slots, and the plan maximizes the total captured level summed over all
+    // trials. This is an assignment problem, solved exactly with the Hungarian algorithm. On exact ties
+    // a member's current signup is kept so nobody is asked to move for no gain.
+    const PLAN_KEEP_CURRENT_BONUS = 1e-6;
+
+    function buildSkillingRecommendations(members, trials, aggregateSkills = [], trialDetails = {}, skillDetails = {}, capacities = null) {
         if (!trials.length) return [];
         const medianBySkill = new Map(aggregateSkills.map((skill) => [skill.skillHrid, skill.median]));
         const candidates = members
             .map((member) => {
                 const options = trials
-                    .map((trial) => ({
-                        trial,
-                        level: getProfileSkillLevel(member, trial.skillHrid),
-                        guildMedian: medianBySkill.get(trial.skillHrid),
-                    }))
+                    .map((trial) => {
+                        const level = getProfileSkillLevel(member, trial.skillHrid);
+                        const guildMedian = medianBySkill.get(trial.skillHrid);
+                        return { trial, level, guildMedian, medianDifference: Number.isFinite(guildMedian) ? level - guildMedian : level };
+                    })
                     .filter((option) => Number.isFinite(option.level));
-                options.forEach((option) => {
-                    option.medianDifference = Number.isFinite(option.guildMedian) ? option.level - option.guildMedian : option.level;
-                });
-                options.sort((left, right) => right.level - left.level || left.trial.name.localeCompare(right.trial.name));
-                return { member, options, specialization: options.length > 1 ? options[0].level - options[1].level : options.length ? options[0].level : -1 };
+                return { member, options };
             })
             .filter((candidate) => candidate.options.length)
-            .sort((left, right) => left.options.length - right.options.length || right.specialization - left.specialization || left.member.name.localeCompare(right.member.name));
-
+            .sort((left, right) => left.member.name.localeCompare(right.member.name) || String(left.member.id).localeCompare(String(right.member.id)));
         if (!candidates.length) return [];
-        const minPerTrial = Math.floor(candidates.length / trials.length);
-        const maxPerTrial = Math.ceil(candidates.length / trials.length);
-        const extraSlots = candidates.length % trials.length;
-        let bestPlan = null;
 
-        function considerQuotas(index, extrasLeft, quotas) {
-            if (index === trials.length) {
-                if (extrasLeft) return;
-                const plan = solveBalancedTrialAssignment(candidates, trials, quotas);
-                if (!plan) return;
-                if (!bestPlan || plan.score > bestPlan.score + 1e-9) {
-                    bestPlan = plan;
-                }
-                return;
-            }
-            quotas[index] = minPerTrial;
-            considerQuotas(index + 1, extrasLeft, quotas);
-            if (extrasLeft) {
-                quotas[index] = maxPerTrial;
-                considerQuotas(index + 1, extrasLeft - 1, quotas);
-            }
-        }
+        const capacityFor = (trial) => {
+            const value = capacities ? capacities.get(trial.trialHrid) : null;
+            return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : candidates.length;
+        };
+        const slots = trials.flatMap((trial) => Array(Math.min(capacityFor(trial), candidates.length)).fill(trial.trialHrid));
+        // One "no slot" column per member keeps the problem solvable when slots run out.
+        const columnCount = slots.length + candidates.length;
+        const unavailable = 1e9;
+        const optionMaps = candidates.map((candidate) => new Map(candidate.options.map((option) => [option.trial.trialHrid, option])));
+        const costs = candidates.map((candidate, row) => Array.from({ length: columnCount }, (_, column) => {
+            if (column >= slots.length) return 0;
+            const option = optionMaps[row].get(slots[column]);
+            if (!option) return unavailable;
+            const keep = candidate.member.currentSkillingTrialHrid === slots[column] ? PLAN_KEEP_CURRENT_BONUS : 0;
+            return -(option.level + keep);
+        }));
+        const columnForRow = solveAssignment(costs);
 
-        considerQuotas(0, extraSlots, []);
-        const recommendedCounts = Object.fromEntries(trials.map((trial) => [trial.trialHrid, 0]));
-        const chosenOptions = bestPlan ? bestPlan.options : candidates.map((candidate) => {
-            const option = candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < minPerTrial) ||
-                candidate.options.find((entry) => recommendedCounts[entry.trial.trialHrid] < maxPerTrial) ||
-                candidate.options[0];
-            recommendedCounts[option.trial.trialHrid] += 1;
-            return option;
-        });
-
-        const assignments = candidates.map((candidate, index) => {
-            const option = chosenOptions[index];
+        const assignments = candidates.map((candidate, row) => {
+            const column = columnForRow[row];
+            const option = column < slots.length && costs[row][column] !== unavailable ? optionMaps[row].get(slots[column]) : null;
             const currentHrid = candidate.member.currentSkillingTrialHrid;
             const currentTrial = trials.find((trial) => trial.trialHrid === currentHrid) || null;
             const currentLevel = currentTrial ? getProfileSkillLevel(candidate.member, currentTrial.skillHrid) : null;
-            const isAligned = currentHrid === option.trial.trialHrid;
-            const signupStatus = isAligned ? "aligned" : currentHrid ? "different" : candidate.member.currentCombatTrialHrid ? "combatOnly" : "unsigned";
-            let reason = bestPlan ? "Maximizes combined trial averages in a balanced roster" : "Eligibility-constrained fallback";
-            if (!currentHrid) {
-                reason = "No skilling signup; eligible for this target";
-            } else if (!isAligned) {
-                reason = `Signed for ${currentTrial ? currentTrial.name : getTrialName(currentHrid, trialDetails, skillDetails)}; target is ${option.trial.name}`;
-            }
-
+            const best = [...candidate.options].sort((left, right) => right.level - left.level)[0];
+            const isAligned = Boolean(option) && currentHrid === option.trial.trialHrid;
+            const signupStatus = !option ? "noSlot"
+                : isAligned ? "aligned"
+                : currentHrid ? "different"
+                : candidate.member.currentCombatTrialHrid ? "combatOnly" : "unsigned";
+            let reason = "Highest total level for the guild";
+            if (!option) reason = "Every open slot in this week's skilling trials goes to a higher level";
+            else if (!currentHrid) reason = `No skilling signup; best spot is ${option.trial.name}`;
+            else if (!isAligned) reason = `Signed for ${currentTrial ? currentTrial.name : getTrialName(currentHrid, trialDetails, skillDetails)}; best spot is ${option.trial.name}`;
             return {
                 memberId: candidate.member.id,
                 memberName: candidate.member.name,
@@ -1297,11 +1297,13 @@
                 currentTrialName: currentTrial ? currentTrial.name : currentHrid
                     ? getTrialName(currentHrid, trialDetails, skillDetails) : "No skilling signup",
                 currentLevel,
-                recommendedTrialHrid: option.trial.trialHrid,
-                recommendedTrialName: option.trial.name,
-                recommendedLevel: option.level,
-                recommendedGuildMedian: option.guildMedian,
-                medianDifference: option.medianDifference,
+                recommendedTrialHrid: option ? option.trial.trialHrid : "",
+                recommendedTrialName: option ? option.trial.name : "No open slot",
+                recommendedLevel: option ? option.level : null,
+                recommendedGuildMedian: option ? option.guildMedian : null,
+                medianDifference: option ? option.medianDifference : null,
+                bestTrialName: best.trial.name,
+                bestLevel: best.level,
                 isAligned,
                 signupStatus,
                 reason,
@@ -1314,34 +1316,28 @@
         });
     }
 
-    function solveBalancedTrialAssignment(candidates, trials, quotas) {
-        const slots = trials.flatMap((trial, index) => Array(quotas[index]).fill(trial.trialHrid));
-        const size = candidates.length;
-        const unavailableCost = 1_000_000;
-        const quotaByTrial = new Map(trials.map((trial, index) => [trial.trialHrid, quotas[index]]));
-        const optionMaps = candidates.map((candidate) => new Map(candidate.options.map((option) => [option.trial.trialHrid, option])));
-        const costs = optionMaps.map((options) => slots.map((trialHrid) => {
-            const option = options.get(trialHrid);
-            if (!option) return unavailableCost;
-            // A member contributes level / roster size to that trial's average.
-            return -option.level / quotaByTrial.get(trialHrid);
-        }));
-        const rowPotentials = Array(size + 1).fill(0);
-        const columnPotentials = Array(size + 1).fill(0);
-        const matchedRows = Array(size + 1).fill(0);
-        const previousColumns = Array(size + 1).fill(0);
-
-        for (let row = 1; row <= size; row += 1) {
+    // Hungarian algorithm (shortest augmenting path with potentials) for a rows x columns cost matrix
+    // with rows <= columns. Returns the column chosen for each row, minimizing the total cost.
+    function solveAssignment(costs) {
+        const rows = costs.length;
+        if (!rows) return [];
+        const columns = costs[0].length;
+        if (columns < rows) throw new Error("solveAssignment needs at least as many columns as rows");
+        const rowPotentials = new Float64Array(rows + 1);
+        const columnPotentials = new Float64Array(columns + 1);
+        const matchedRows = new Int32Array(columns + 1);
+        const previousColumns = new Int32Array(columns + 1);
+        for (let row = 1; row <= rows; row += 1) {
             matchedRows[0] = row;
-            const minimumCosts = Array(size + 1).fill(Infinity);
-            const used = Array(size + 1).fill(false);
+            const minimumCosts = new Float64Array(columns + 1).fill(Infinity);
+            const used = new Uint8Array(columns + 1);
             let column = 0;
             do {
-                used[column] = true;
+                used[column] = 1;
                 const activeRow = matchedRows[column];
                 let adjustment = Infinity;
                 let nextColumn = 0;
-                for (let candidateColumn = 1; candidateColumn <= size; candidateColumn += 1) {
+                for (let candidateColumn = 1; candidateColumn <= columns; candidateColumn += 1) {
                     if (used[candidateColumn]) continue;
                     const reducedCost = costs[activeRow - 1][candidateColumn - 1] - rowPotentials[activeRow] - columnPotentials[candidateColumn];
                     if (reducedCost < minimumCosts[candidateColumn]) {
@@ -1353,7 +1349,7 @@
                         nextColumn = candidateColumn;
                     }
                 }
-                for (let candidateColumn = 0; candidateColumn <= size; candidateColumn += 1) {
+                for (let candidateColumn = 0; candidateColumn <= columns; candidateColumn += 1) {
                     if (used[candidateColumn]) {
                         rowPotentials[matchedRows[candidateColumn]] += adjustment;
                         columnPotentials[candidateColumn] -= adjustment;
@@ -1369,17 +1365,11 @@
                 column = previous;
             } while (column);
         }
-
-        const chosen = Array(size);
-        for (let column = 1; column <= size; column += 1) {
-            const row = matchedRows[column] - 1;
-            if (costs[row][column - 1] === unavailableCost) return null;
-            chosen[row] = optionMaps[row].get(slots[column - 1]);
+        const columnForRow = new Array(rows);
+        for (let column = 1; column <= columns; column += 1) {
+            if (matchedRows[column]) columnForRow[matchedRows[column] - 1] = column - 1;
         }
-        return {
-            options: chosen,
-            score: chosen.reduce((sum, option) => sum + option.level / quotaByTrial.get(option.trial.trialHrid), 0),
-        };
+        return columnForRow;
     }
 
     function buildMedianTrialSuggestions(members, trials, aggregateSkills) {
@@ -1529,6 +1519,7 @@
         buildRecruitMessage,
         TRIAL_REMINDER_MESSAGE,
         buildTrialReminderWhisper,
+        solveAssignment,
         isReplaceableChatDraft,
         AURA_DEFINITIONS,
         UTILITY_DEFINITIONS,
@@ -1593,7 +1584,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.15.1";
+    const SCRIPT_VERSION = "0.16.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2173,6 +2164,8 @@ function startGuildMonitor(Core) {
             #${SCRIPT_ID}-panel .mwigm-trial-none { color: #f19a91; }
             #${SCRIPT_ID}-panel .mwigm-trial-signed::before, #${SCRIPT_ID}-panel .mwigm-trial-none::before { content: ""; display: inline-block; width: 6px; height: 6px; margin: 0 5px 1px 7px; border-radius: 50%; background: currentColor; }
             .mwigm-roster-names { display: block; margin-top: 3px; line-height: 1.35; }
+            .mwigm-plan-table .mwigm-subtext { display: block; margin-top: 2px; }
+            .mwigm-plan-table td:first-child { min-width: 110px; max-width: 220px; overflow-wrap: anywhere; }
             .mwigm-chip { display: inline-block; padding: 1px 5px; border: 1px solid #536681; border-radius: 4px; color: #bdc9d9; font-size: 11px; white-space: nowrap; }
             .mwigm-table .mwigm-chip { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
             .mwigm-chip-good { border-color: #3f9076; color: #77d2b2; }
@@ -2299,6 +2292,7 @@ function startGuildMonitor(Core) {
                 <button class="mwigm-tab" type="button" data-tab="members">Members</button>
                 <button class="mwigm-tab" type="button" data-tab="auras">Auras</button>
                 <button class="mwigm-tab" type="button" data-tab="trials">Trials</button>
+                <button class="mwigm-tab" type="button" data-tab="plan">Skilling plan</button>
                 <button class="mwigm-tab" type="button" data-tab="results">Results</button>
                 <button class="mwigm-tab" type="button" data-tab="guild">Guild</button>
                 <button class="mwigm-tab" type="button" data-tab="shrines">Shrines</button>
@@ -2423,7 +2417,7 @@ function startGuildMonitor(Core) {
     }
 
     function renderToolbar(aggregate) {
-        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "guild" ? "Find a building or shrine" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
+        const searchPlaceholder = state.activeTab === "skills" ? "Find a skill" : state.activeTab === "trials" || state.activeTab === "plan" ? "Find a trial or member" : state.activeTab === "auras" ? "Find a member or ability" : state.activeTab === "results" ? "Find a trial or week" : state.activeTab === "guild" ? "Find a building or shrine" : state.activeTab === "shrines" ? "Find a shrine, credit, or item" : "Find a member";
         if (state.activeTab === "results") {
             return `<input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">`;
         }
@@ -2449,7 +2443,7 @@ function startGuildMonitor(Core) {
 
         return `
             <input class="mwigm-input" data-control="query" type="search" placeholder="${searchPlaceholder}" value="${escapeHtml(state.query)}" aria-label="${searchPlaceholder}">
-            ${state.activeTab === "trials" ? "" : `<select class="mwigm-select" data-control="sort" aria-label="Sort results">${withSelectedOption(sortOptions, state.sort)}</select>`}
+            ${state.activeTab === "trials" || state.activeTab === "plan" ? "" : `<select class="mwigm-select" data-control="sort" aria-label="Sort results">${withSelectedOption(sortOptions, state.sort)}</select>`}
             <button class="mwigm-command" type="button" data-action="snapshot" ${aggregate.coveredCount ? "" : "disabled"}>Snapshot</button>
             <button class="mwigm-command mwigm-command-primary" type="button" data-action="export" ${aggregate.coveredCount ? "" : "disabled"}>Export CSV</button>
         `;
@@ -2465,6 +2459,7 @@ function startGuildMonitor(Core) {
         }
         if (state.activeTab === "members") return renderMembers(aggregate);
         if (state.activeTab === "trials") return renderTrials(aggregate);
+        if (state.activeTab === "plan") return renderSkillingPlan(aggregate);
         if (state.activeTab === "results") return renderResults();
         if (state.activeTab === "auras") return renderAuras(aggregate);
         if (state.activeTab === "shrines") return renderShrines();
@@ -2698,6 +2693,60 @@ function startGuildMonitor(Core) {
             ? "Signup reminders are open until the start."
             : `Unsigned members and Remind buttons appear ${escapeHtml(formatUntil(schedule.reminderOpensAt))}, at ${escapeHtml(formatTrialTime(schedule.reminderOpensAt))}: 24 hours before the start, or at the guild week reset if that is later.`;
         return `<div class="mwigm-notice mwigm-notice-info mwigm-trial-schedule">Trials start ${when} · ${escapeHtml(formatUntil(schedule.startAt))}.<br><span class="mwigm-subtext">${reminderLine}</span></div>`;
+    }
+
+    function renderSkillingPlan(aggregate) {
+        const analysis = currentTrialAnalysis(aggregate);
+        if (!analysis.skilling.length) {
+            return emptyState("Waiting for weekly trials", "Reload the game or open Guild > Trials so this week's skilling trials are available.");
+        }
+        const query = state.query.toLocaleLowerCase();
+        const matches = (...values) => !query || values.some((value) => String(value || "").toLocaleLowerCase().includes(query));
+        const flag = (entry) => {
+            if (entry.signupStatus === "aligned") return `<span class="mwigm-chip mwigm-chip-good">Right spot</span>`;
+            if (entry.signupStatus === "different") return `<span class="mwigm-chip mwigm-chip-warn">Wrong trial · move to ${escapeHtml(entry.recommendedTrialName)}</span>`;
+            if (entry.signupStatus === "combatOnly") return `<span class="mwigm-chip mwigm-chip-warn">No skilling signup · combat only</span>`;
+            if (entry.signupStatus === "unsigned") return `<span class="mwigm-chip mwigm-chip-alert">Not signed up for any trial</span>`;
+            if (entry.signupStatus === "noSlot") return `<span class="mwigm-chip">No open slot</span>`;
+            return `<span class="mwigm-chip">Unknown</span>`;
+        };
+        const rightSpot = analysis.recommendations.filter((entry) => entry.signupStatus === "aligned").length;
+        const needAction = analysis.recommendations.filter((entry) => ["different", "combatOnly", "unsigned"].includes(entry.signupStatus)).length;
+        const gain = analysis.plannedTotalLevel - analysis.currentTotalLevel;
+        const trialRows = analysis.optimalDistribution.map((trial) => {
+            const slots = Number.isFinite(trial.planCapacity) ? `${trial.assignments.length}/${trial.planCapacity}` : `${trial.assignments.length}`;
+            const names = trial.assignments.map((entry) => `${entry.memberName} (${entry.recommendedLevel})`).join(", ") || "Nobody";
+            return `<tr><td><span class="mwigm-member-name">${escapeHtml(trial.trialName)}</span><span class="mwigm-subtext mwigm-roster-names">${escapeHtml(names)}</span></td>
+                <td title="Planned members / open slots for members with captured levels"><strong>${escapeHtml(slots)}</strong></td>
+                <td><strong>${formatExactNumber(trial.targetTotalLevel)}</strong></td>
+                <td>${formatExactNumber(trial.actualTotalLevel)}${trial.unknownActualCount ? `<span class="mwigm-subtext">+${trial.unknownActualCount} without profile</span>` : ""}</td></tr>`;
+        }).join("");
+        const memberRows = analysis.recommendations
+            .filter((entry) => matches(entry.memberName, entry.currentTrialName, entry.recommendedTrialName))
+            .map((entry) => `<tr data-plan-status="${escapeHtml(entry.signupStatus)}"><td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span></td>
+                <td>${flag(entry)}</td>
+                <td>${escapeHtml(entry.currentTrialName)}${Number.isFinite(entry.currentLevel) ? `<span class="mwigm-subtext">Level ${entry.currentLevel}</span>` : ""}</td>
+                <td><strong>${escapeHtml(entry.recommendedTrialName)}</strong>${Number.isFinite(entry.recommendedLevel) ? `<span class="mwigm-subtext">Level ${entry.recommendedLevel}${entry.bestLevel > entry.recommendedLevel ? ` · best skill ${escapeHtml(entry.bestTrialName)} ${entry.bestLevel} is full` : ""}</span>` : ""}</td></tr>`)
+            .join("");
+        const plannedIds = new Set(analysis.recommendations.map((entry) => String(entry.memberId)));
+        const unplannable = analysis.memberComparisons.filter((entry) => !plannedIds.has(String(entry.memberId)) && matches(entry.memberName, entry.currentTrialName));
+        const unsignedAnyTrial = analysis.unsignedTrials.filter((member) => matches(member.name));
+        return `
+            <div class="mwigm-notice mwigm-notice-info"><strong>Best skilling signups for the highest total level.</strong> Each member can join one of this week's skilling trials, and each trial has limited slots. The plan puts every member with a captured profile where the guild's total level, summed over all trials, is highest. It is solved exactly with the Hungarian assignment algorithm. When open slots are plentiful, this is simply each member's highest skill among this week's trials. It is a suggestion only; no signups are changed.</div>
+            <div class="mwigm-status">
+                ${metric("Planned total", formatExactNumber(analysis.plannedTotalLevel))}
+                ${metric("Signed up now", formatExactNumber(analysis.currentTotalLevel))}
+                ${metric("Right spot", `${rightSpot}/${analysis.recommendations.length}`)}
+                ${metric("Need to act", needAction)}
+            </div>
+            ${unsignedAnyTrial.length ? `<div class="mwigm-notice"><strong>Not signed up for any trial (${unsignedAnyTrial.length}):</strong> ${escapeHtml(unsignedAnyTrial.map((member) => member.name).join(", "))}</div>` : ""}
+            <div class="mwigm-section-title">Trials <span>${gain > 0 ? `+${formatExactNumber(gain)} levels if everyone follows the plan` : "Current signups already match the plan's total"}</span></div>
+            <table class="mwigm-table mwigm-plan-table"><thead><tr><th style="width:40%">Trial and planned members</th><th>Slots</th><th>Planned total</th><th>Signed up now</th></tr></thead><tbody>${trialRows || emptyTableRow(4)}</tbody></table>
+            <div class="mwigm-section-title">Members <span>Flagged members first</span></div>
+            <table class="mwigm-table mwigm-plan-table"><thead><tr><th style="width:22%">Member</th><th>Flag</th><th>Signed up now</th><th>Best spot</th></tr></thead><tbody>${memberRows || emptyTableRow(4)}</tbody></table>
+            ${unplannable.length ? `<div class="mwigm-section-title">Not in the plan <span>No captured levels for this week's skills</span></div>
+            <table class="mwigm-table"><thead><tr><th style="width:30%">Member</th><th>Signed up now</th><th>Why</th></tr></thead><tbody>${unplannable.map((entry) => `<tr><td><span class="mwigm-member-name">${escapeHtml(entry.memberName)}</span></td><td>${escapeHtml(entry.currentTrialName)}</td><td class="mwigm-muted">${escapeHtml(entry.reason)}. Open their Profile to include them.</td></tr>`).join("")}</tbody></table>` : ""}
+        `;
     }
 
     function renderTrials(aggregate) {
