@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI Guild Monitor
 // @namespace    https://github.com/local/mwi-guild-monitor
-// @version      0.16.1
+// @version      0.17.0
 // @description  Guild, trial, shrine, and market analytics with manual profile lookup for Milky Way Idle leaders and officers.
 // @author       Jack
 // @homepageURL  https://github.com/Jalex3722/mwi-guild-monitor
@@ -497,16 +497,43 @@
         return points.length ? points.reduce((total, value) => total + value, 0) : null;
     }
 
+    // A finished week counts as missed only when the member was seen without a signup late in that week
+    // (the last day before the next week starts). Weeks this browser did not watch stay unknown.
+    function getWeekTrialStatus(history, weekStartAt, memberId) {
+        const weekStart = toTimestamp(weekStartAt);
+        if (weekStart === null) return "unknown";
+        const week = asObject(history)[String(weekStart)];
+        const member = week && asObject(week.members)[String(memberId)];
+        if (!member) return "unknown";
+        if (member.signedSkilling || member.signedCombat) return "participated";
+        const lastObservedAt = toTimestamp(member.observedAt ?? week.observedAt);
+        return lastObservedAt !== null && lastObservedAt >= weekStart + 6 * DAY_MS ? "missed" : "unknown";
+    }
+
     function getPreviousWeekTrialStatus(history, currentWeekStartAt, memberId) {
         const currentWeekStart = toTimestamp(currentWeekStartAt);
         if (currentWeekStart === null) return "unknown";
-        const previousWeekStart = currentWeekStart - WEEK_MS;
-        const previousWeek = asObject(history)[String(previousWeekStart)];
-        const member = previousWeek && asObject(previousWeek.members)[String(memberId)];
-        if (!member) return "unknown";
-        if (member.signedSkilling || member.signedCombat) return "participated";
-        const lastObservedAt = toTimestamp(member.observedAt ?? previousWeek.observedAt);
-        return lastObservedAt !== null && lastObservedAt >= previousWeekStart + 6 * DAY_MS ? "missed" : "unknown";
+        return getWeekTrialStatus(history, currentWeekStart - WEEK_MS, memberId);
+    }
+
+    const RECENT_TRIAL_WEEKS = 5;
+    const RECENT_TRIAL_MISS_LIMIT = 2;
+
+    // Trial attendance over the last finished weeks (the current week is still open, so it is not counted).
+    function getRecentTrialRecord(history, currentWeekStartAt, memberId, weeks = RECENT_TRIAL_WEEKS) {
+        const currentWeekStart = toTimestamp(currentWeekStartAt);
+        const statuses = currentWeekStart === null ? Array(weeks).fill("unknown")
+            : Array.from({ length: weeks }, (_, index) => getWeekTrialStatus(history, currentWeekStart - (index + 1) * WEEK_MS, memberId));
+        const missed = statuses.filter((status) => status === "missed").length;
+        const participated = statuses.filter((status) => status === "participated").length;
+        return {
+            weeks,
+            statuses,
+            missed,
+            participated,
+            known: missed + participated,
+            flagged: missed >= RECENT_TRIAL_MISS_LIMIT,
+        };
     }
 
     function buildMemberTracking(aggregate, history = {}, currentWeekStartAt = null, now = Date.now()) {
@@ -519,6 +546,7 @@
                 offlineDurationMs,
                 offlineThreeDays: offlineDurationMs !== null && offlineDurationMs >= 3 * DAY_MS,
                 previousWeekStatus: getPreviousWeekTrialStatus(history, weekStart, member.id),
+                recentTrials: getRecentTrialRecord(history, weekStart, member.id),
             };
         });
     }
@@ -1455,7 +1483,7 @@
     function toCsv(aggregate, skillDetails = {}, trialDetails = {}, auraAssignments = {}, memberTracking = [], guildWeekStartAt = null) {
         const skillHrids = aggregate.skills.map((skill) => skill.skillHrid);
         const trackingById = new Map((Array.isArray(memberTracking) ? memberTracking : []).map((entry) => [String(entry.memberId), entry]));
-        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Special", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
+        const header = ["Member", "Role", "Guild XP", "Weekly Guild XP", "Desired Special", "Offline Days", "Offline 3+ Days", "Previous Week Trial", "Missed Of Last 5 Trials", "Skilling Trial", "Combat Trial", "Combat Role", "Captured At", ...skillHrids.map((hrid) => getSkillName(hrid, skillDetails))];
         const rows = aggregate.members.map((member) => {
             const profile = member.profile;
             const tracking = trackingById.get(String(member.id));
@@ -1472,6 +1500,7 @@
                 tracking && tracking.offlineDurationMs !== null ? (tracking.offlineDurationMs / DAY_MS).toFixed(1) : "",
                 tracking && tracking.offlineThreeDays ? "Yes" : "No",
                 previousWeekLabel,
+                tracking && tracking.recentTrials ? `${tracking.recentTrials.missed} of ${tracking.recentTrials.known} known` : "",
                 currentSignup && member.signedUpSkillingTrialHrid ? getTrialName(member.signedUpSkillingTrialHrid, trialDetails, skillDetails) : "",
                 currentSignup && member.signedUpCombatTrialHrid ? getTrialName(member.signedUpCombatTrialHrid, trialDetails, skillDetails) : "",
                 currentSignup && member.signedUpCombatRoleHrid ? prettifyHrid(member.signedUpCombatRoleHrid) : "",
@@ -1533,6 +1562,9 @@
         analyzeTrials,
         asObject,
         buildMemberTracking,
+        getRecentTrialRecord,
+        RECENT_TRIAL_WEEKS,
+        RECENT_TRIAL_MISS_LIMIT,
         compareSkillsByDisplayOrder,
         getPreviousSnapshot,
         getPreviousWeekTrialStatus,
@@ -1584,7 +1616,7 @@ function startGuildMonitor(Core) {
     "use strict";
 
     const SCRIPT_ID = "mwi-guild-monitor";
-    const SCRIPT_VERSION = "0.16.1";
+    const SCRIPT_VERSION = "0.17.0";
     const STORAGE_KEY = `${SCRIPT_ID}:v1`;
     const MARKET_STORAGE_KEY = `${SCRIPT_ID}:market:v1`;
     const MARKET_REFRESH_MS = 65 * 60_000;
@@ -2436,7 +2468,7 @@ function startGuildMonitor(Core) {
             : state.activeTab === "auras"
             ? `<option value="name">Member name</option><option value="aura">Special ability</option><option value="unsigned">Unsigned first</option>`
             : state.activeTab === "members"
-            ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option>`
+            ? `<option value="name">Member name</option><option value="total">Highest total</option><option value="offline">Longest offline</option><option value="missed">Missed last week</option><option value="missedRecent">Most missed (last 5)</option>`
             : state.activeTab === "missing"
             ? `<option value="freshness">Needs profile / oldest viewed</option><option value="name">Member name</option>`
             : `<option value="name">Member name</option><option value="total">Highest total</option><option value="freshness">Oldest profile</option>`;
@@ -2520,6 +2552,13 @@ function startGuildMonitor(Core) {
         const missedCount = tracking.filter((entry) => entry.previousWeekStatus === "missed").length;
         const knownPreviousCount = tracking.filter((entry) => entry.previousWeekStatus !== "unknown").length;
         const hiddenCount = aggregate.members.filter((member) => member.hideOnlineStatus).length;
+        const memberNameById = new Map(aggregate.members.map((member) => [String(member.id), member.name]));
+        const frequentMisses = tracking.filter((entry) => entry.recentTrials && entry.recentTrials.flagged)
+            .sort((left, right) => right.recentTrials.missed - left.recentTrials.missed || String(memberNameById.get(String(left.memberId))).localeCompare(String(memberNameById.get(String(right.memberId)))));
+        const frequentMissNotice = frequentMisses.length
+            ? `<div class="mwigm-notice"><strong>Missed ${Core.RECENT_TRIAL_MISS_LIMIT}+ of the last ${Core.RECENT_TRIAL_WEEKS} trial weeks (${frequentMisses.length}):</strong> ${frequentMisses.map((entry) => `${escapeHtml(memberNameById.get(String(entry.memberId)) || entry.memberName)} (${entry.recentTrials.missed}/${Core.RECENT_TRIAL_WEEKS})`).join(", ")}
+                <span class="mwigm-subtext mwigm-roster-names">Counts weeks with no skilling or combat signup, consecutive or not. Only weeks this browser watched near their end are counted; the current week is not included.</span></div>`
+            : "";
         const overview = `
             <div class="mwigm-status">
                 ${metric("Offline 3d+", offlineCount)}
@@ -2527,6 +2566,7 @@ function startGuildMonitor(Core) {
                 ${metric("Prior week known", `${knownPreviousCount}/${aggregate.memberCount}`)}
                 ${metric("Hidden status", hiddenCount)}
             </div>
+            ${frequentMissNotice}
         `;
         const rows = members.map((member) => {
             const profile = member.profile;
@@ -2555,6 +2595,11 @@ function startGuildMonitor(Core) {
             const previousWeekStatus = memberTracking ? memberTracking.previousWeekStatus : "unknown";
             const previousWeekLabel = previousWeekStatus === "missed" ? "No signup" : previousWeekStatus === "participated" ? "Signed" : "Unknown";
             const previousWeekClass = previousWeekStatus === "missed" ? "mwigm-chip-alert" : previousWeekStatus === "participated" ? "mwigm-chip-good" : "";
+            const recent = memberTracking && memberTracking.recentTrials;
+            const recentTitle = recent ? recent.statuses.map((status, index) => `${index + 1} week${index ? "s" : ""} ago: ${status === "missed" ? "no signup" : status === "participated" ? "signed" : "unknown"}`).join(" · ") : "";
+            const recentLine = recent
+                ? `<span class="mwigm-subtext mwigm-roster-names" title="${escapeHtml(recentTitle)}">${recent.flagged ? `<span class="mwigm-chip mwigm-chip-alert">Missed ${recent.missed} of last ${recent.weeks}</span>` : `Missed ${recent.missed} of last ${recent.weeks}`}${recent.known < recent.weeks ? ` · ${recent.weeks - recent.known} unknown` : ""}</span>`
+                : "";
             const trialChoices = trialSuggestion
                 ? `${renderMemberTrialChoice(trialSuggestion.first, "1st", "mwigm-chip-good")}${trialSuggestion.second ? renderMemberTrialChoice(trialSuggestion.second, "2nd", "") : ""}`
                 : "";
@@ -2564,16 +2609,16 @@ function startGuildMonitor(Core) {
                 : "";
             return `
                 <tr>
-                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${special ? `<span class="mwigm-member-skills">Special: ${escapeHtml(special.name)}</span>` : ""}${leaderboardLine}</td>
+                    <td><span class="mwigm-member-heading"><span class="mwigm-member-name">${escapeHtml(member.name)}</span>${trialChoices}${memberTracking && memberTracking.offlineThreeDays ? `<span class="mwigm-chip mwigm-chip-alert">Offline 3d+</span>` : ""}${recent && recent.flagged ? `<span class="mwigm-chip mwigm-chip-alert" title="${escapeHtml(recentTitle)}">Missed ${recent.missed}/${recent.weeks} trials</span>` : ""}</span><span class="mwigm-subtext">${escapeHtml(Core.prettifyHrid(member.role))} · ${escapeHtml(activity)}</span>${strongest ? `<span class="mwigm-member-skills">Best: ${escapeHtml(strongest.name)} ${strongest.level}</span>` : ""}${special ? `<span class="mwigm-member-skills">Special: ${escapeHtml(special.name)}</span>` : ""}${leaderboardLine}</td>
                     <td>${total ? total.level : "--"}</td>
                     <td>${formatNumber(member.experience)}</td>
                     <td>${formatNumber(member.weeklyExperience)}</td>
                     <td title="Skilling: ${escapeHtml(skillingTrial)} · Combat: ${escapeHtml(combatTrial)}${belowCombat100 ? ` · Captured ${escapeHtml(belowCombatLabel)}` : ""}${currentSignup && member.signedUpCombatRoleHrid ? ` · ${escapeHtml(Core.prettifyHrid(member.signedUpCombatRoleHrid))}` : ""}"><span class="mwigm-trial-type">Skill</span><span class="${signedSkilling ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(skillingTrial)}</span><br><span class="mwigm-trial-type">Combat</span><span class="${signedCombat || belowCombat100 ? "mwigm-trial-signed" : "mwigm-trial-none"}">${escapeHtml(combatDisplay)}</span>${signedCombat && belowCombat100 ? `<span class="mwigm-subtext mwigm-roster-names">${escapeHtml(belowCombatLabel)}</span>` : ""}</td>
-                    <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span></td>
+                    <td><span class="mwigm-chip ${previousWeekClass}">${previousWeekLabel}</span>${recentLine}</td>
                 </tr>
             `;
         }).join("");
-        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous week</th></tr></thead><tbody>${rows || emptyTableRow(6)}</tbody></table>`;
+        return `${overview}<table class="mwigm-table mwigm-members-table"><thead><tr><th style="width:25%">Member</th><th>Total</th><th>Guild XP</th><th>Weekly XP</th><th>Current trials</th><th>Previous weeks</th></tr></thead><tbody>${rows || emptyTableRow(6)}</tbody></table>`;
     }
 
     function renderMemberTrialChoice(choice, rank, className) {
@@ -3233,6 +3278,13 @@ function startGuildMonitor(Core) {
                 return (right && right.offlineDurationMs !== null ? right.offlineDurationMs : -1) -
                     (left && left.offlineDurationMs !== null ? left.offlineDurationMs : -1) || a.name.localeCompare(b.name);
             });
+        }
+        if (state.sort === "missedRecent") {
+            const missedOf = (member) => {
+                const entry = trackingById.get(String(member.id));
+                return entry && entry.recentTrials ? entry.recentTrials.missed : -1;
+            };
+            return [...members].sort((a, b) => missedOf(b) - missedOf(a) || a.name.localeCompare(b.name));
         }
         if (state.sort === "missed") {
             const rank = { missed: 0, participated: 1, unknown: 2 };

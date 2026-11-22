@@ -47,7 +47,7 @@ It never sends gameplay commands or automatically requests profiles. Its only ad
 
 The script includes `@updateURL` and `@downloadURL` metadata. Tampermonkey will detect a pushed release when its `@version` is newer than the installed version. You can also trigger **Check for userscript updates** from the Tampermonkey dashboard.
 
-The monitor header displays its running version. The current release is `v0.16.1`.
+The monitor header displays its running version. The current release is `v0.17.0`.
 
 ## Collecting member skill data
 
@@ -109,6 +109,12 @@ The **Results** tab keeps a rolling 12-week local record of trial status, highes
 Combat recommendations are not generated. Combat level alone cannot account for equipment, abilities, consumables, roles, or encounter mechanics, so the dashboard reports combat roster and role coverage without presenting a misleading “best” encounter.
 
 The script keeps a rolling local ledger of the latest signup state it observed for each guild week. In the following week, **No signup** means the member was still unsigned in both categories when observed during the final 24 hours of the prior week. **Signed** means either signup was observed. **Unknown** means the member was not observed late enough to establish an unsigned status, or that week was not observed at all. The monitor records signup state, not actual trial attendance.
+
+## Trial attendance
+
+The **Members** tab tracks attendance over the last 5 finished trial weeks, not just the previous week. Each member's **Previous weeks** cell shows how many of those 5 weeks they missed, whether or not the misses were back to back. Hover over it to see each week. Members who missed **2 or more of the last 5** get a red chip, and they are listed in a notice at the top of the tab. The **Most missed (last 5)** sort puts them first, and the CSV export has a *Missed Of Last 5 Trials* column.
+
+A week counts as missed when the member had no skilling or combat signup and this browser saw the roster during that week's last day. The current week is never counted. Weeks the monitor did not see, or saw only early, count as *unknown*, not missed, so the count builds up over the weeks you have the game open. The record is kept locally for up to 12 weeks.
 
 ## Skilling plan
 

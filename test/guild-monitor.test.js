@@ -669,7 +669,7 @@ test("includes offline and prior-week status in CSV exports", () => {
         previousWeekStatus: "missed",
     }]);
 
-    assert.match(csv, /Offline Days,Offline 3\+ Days,Previous Week Trial/);
+    assert.match(csv, /Offline Days,Offline 3\+ Days,Previous Week Trial,Missed Of Last 5 Trials/);
     assert.match(csv, /4\.0,Yes,No signup/);
 });
 
@@ -1198,4 +1198,39 @@ test("only the Remind button may replace the leftover whisper prefix", () => {
     assert.doesNotMatch(source.match(/prepareChatDraft\(memberId, "Get profile"[^;]*;/)[0], /replaceWhisperPrefix/);
     assert.match(source, /fillGameChatDraft\(Core\.buildRecruitMessage\(\), "Recruit message"\)/);
     assert.match(source, /if \(draft && !\(replaceWhisperPrefix && Core\.isReplaceableChatDraft\(draft\)\)\) return/);
+});
+
+test("counts missed trial weeks in the last five finished weeks, consecutive or not", () => {
+    const week = 7 * 86_400_000;
+    const current = 100 * week;
+    const lateIn = (start) => start + 6.5 * 86_400_000;
+    // Weeks 1..6 ago: missed, signed, missed, unseen, missed (seen only early), signed.
+    const history = {};
+    const record = (weeksAgo, members) => {
+        const start = current - weeksAgo * week;
+        history[String(start)] = { weekStartAt: start, observedAt: lateIn(start), members };
+    };
+    record(1, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: false, observedAt: lateIn(current - week) }, 2: { memberName: "Bo", signedSkilling: true, signedCombat: false, observedAt: lateIn(current - week) } });
+    record(2, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: true, observedAt: lateIn(current - 2 * week) }, 2: { memberName: "Bo", signedSkilling: false, signedCombat: false, observedAt: lateIn(current - 2 * week) } });
+    record(3, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: false, observedAt: lateIn(current - 3 * week) } });
+    record(5, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: false, observedAt: current - 5 * week + 86_400_000 } });
+    record(6, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: false, observedAt: lateIn(current - 6 * week) } });
+    record(0, { 1: { memberName: "Ada", signedSkilling: false, signedCombat: false, observedAt: current + 6.5 * 86_400_000 } });
+
+    const ada = Core.getRecentTrialRecord(history, current, "1");
+    assert.deepEqual(ada.statuses, ["missed", "participated", "missed", "unknown", "unknown"]);
+    assert.equal(ada.missed, 2, "two non-consecutive misses; the current week and week 6 are not counted");
+    assert.equal(ada.known, 3);
+    assert.equal(ada.flagged, true);
+
+    const bo = Core.getRecentTrialRecord(history, current, "2");
+    assert.equal(bo.missed, 1);
+    assert.equal(bo.flagged, false);
+    assert.equal(Core.getRecentTrialRecord(history, null, "1").known, 0);
+
+    const tracking = Core.buildMemberTracking({ members: [{ id: "1", name: "Ada" }, { id: "2", name: "Bo" }] }, history, current, current + 86_400_000);
+    assert.deepEqual(tracking.map((entry) => entry.recentTrials.missed), [2, 1]);
+    assert.deepEqual(tracking.map((entry) => entry.previousWeekStatus), ["missed", "participated"]);
+    assert.equal(Core.RECENT_TRIAL_WEEKS, 5);
+    assert.equal(Core.RECENT_TRIAL_MISS_LIMIT, 2);
 });

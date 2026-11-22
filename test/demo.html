@@ -106,6 +106,19 @@
                                     3: { memberName: "Curie", signedSkilling: false, signedCombat: false },
                                 },
                             },
+                            // Older weeks: Babbage misses 2 of the last 5 (not back to back), Curie 3.
+                            ...Object.fromEntries([2, 3, 4, 5].map((weeksAgo) => {
+                                const start = currentWeekStartAt - weeksAgo * 7 * 86_400_000;
+                                return [start, {
+                                    weekStartAt: start,
+                                    observedAt: start + 6.5 * 86_400_000,
+                                    members: {
+                                        1: { memberName: "Ada", signedSkilling: true, signedCombat: false },
+                                        2: { memberName: "Babbage", signedSkilling: weeksAgo !== 2 && weeksAgo !== 4, signedCombat: false },
+                                        3: { memberName: "Curie", signedSkilling: weeksAgo === 3, signedCombat: false },
+                                    },
+                                }];
+                            })),
                         },
                     },
                 },
